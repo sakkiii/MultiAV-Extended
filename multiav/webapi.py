@@ -5,7 +5,7 @@ import time
 
 import web
 from hashlib import md5, sha1, sha256
-from multiav.core import CMultiAV, AV_SPEED_ULTRA
+from multiav.core import CMultiAV, AV_SPEED_ALL
 
 urls = (
     '/', 'index',
@@ -158,9 +158,18 @@ class api_upload:
     buf = i["file_upload"].value
     filename = i["file_upload"].filename
 
+    # Calculate the hashes
+    report = {
+        "hashes": {
+            "md5": md5(buf).hexdigest(),
+            "sha1": sha1(buf).hexdigest(),
+            "sha256": sha256(buf).hexdigest()
+        }
+    }
+
     # Scan the file
     av = CMultiAV()
-    report = av.scan_buffer(buf)
+    report.update(av.scan_buffer(buf))
 
     db_api = CDbSamples()
     db_api.insert_sample(filename, buf, report)
@@ -178,9 +187,18 @@ class api_upload_fast:
     buf = i["file_upload"].value
     filename = i["file_upload"].filename
 
+    # Calculate the hashes
+    report = {
+        "hashes": {
+            "md5": md5(buf).hexdigest(),
+            "sha1": sha1(buf).hexdigest(),
+            "sha256": sha256(buf).hexdigest()
+        }
+    }
+
     # Scan the file
     av = CMultiAV()
-    report = av.scan_buffer(buf, speed)
+    report.update(av.scan_buffer(buf, speed))
 
     db_api = CDbSamples()
     db_api.insert_sample(filename, buf, report)
