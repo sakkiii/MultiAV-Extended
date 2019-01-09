@@ -538,7 +538,7 @@ class CWindowsDefScanner(CAvScanner):
       pass
 
     try:
-      output = check_output(cmd, stderr=STDOUT)
+      output = check_output(cmd, stderr=STDOUT, cwd = os.path.dirname(cmd[0]))
     except CalledProcessError as e:
       output = e.output
 
