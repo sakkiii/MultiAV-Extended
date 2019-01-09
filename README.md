@@ -27,6 +27,7 @@ engines is the following:
    * MicroWorld-eScan (Fast)
    * Cyren (Ultra-fast)
    * QuickHeal (Fast)
+   * Windows Defender using https://github.com/taviso/loadlibrary (Fast)
 
 This tool have been tested only under Linux. However, it should work equally
 in other Unix based operating systems as well as in Windows as long as the
@@ -34,11 +35,11 @@ output from the AV command line utilities maintains the same format.
 
 ## Example usages
 
-MultiAV.py can be executed via the command line by simply giving to it a
+MultiAV-Scan.py can be executed via the command line by simply giving to it a
 valid path:
 
 ```
-$ python multiav.py malware/xpaj/
+$ python multiav-scan.py malware/xpaj/
 
 {'AVG': {'malware/xpaj/00908235ee9e267fa2f4c83fb4304c63af976cbc': 'Win32/Xpaj',
          'malware/xpaj/43194f9abf525520639a8bcd434403287ffac63b': 'Win32/Xpaj',
@@ -174,7 +175,7 @@ DISABLED=1
 
 # Example Web interface and JSON based web API
 
-Since commit c3828b337b98a450a8b48c764aecbb04cc4d2324, MultiAV distributes a basic example web interface using web.py that offers a simple JSON based API. There is also an example client called "multiav-client.py" that uses the JSON API to scan a file with the multiple engines configured in the MultiAV server.
+Since commit c3828b337b98a450a8b48c764aecbb04cc4d2324, MultiAV distributes a basic example web interface using web.py that offers a simple JSON based API. Start the web interface by running ``python scripts/runserver.py``. There is also an example client called "multiav-client.py" that uses the JSON API to scan a file with the multiple engines configured in the MultiAV server.
 
 The current version of the basic JSON based web API exports 3 methods:
 
