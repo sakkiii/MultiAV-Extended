@@ -271,6 +271,8 @@ class CClamScanner(CAvScanner):
   def scan_one(self, path):
     try:
       tmp = pyclamd.scan_file(path)
+      # fix output form e.g {u'/tmp/tmpbspbPz': ('FOUND', 'Eicar-Test-Signature')}
+      tmp[path] = tmp[path][1]
       if tmp: self.results.update(tmp)
     except:
       pass
