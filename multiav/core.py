@@ -65,7 +65,7 @@ import time
 import ConfigParser
 
 from tempfile import NamedTemporaryFile
-from subprocess import check_output, CalledProcessError, call
+from subprocess import check_output, CalledProcessError, call, STDOUT
 from multiprocessing import Process, Queue, cpu_count
 
 try:
@@ -509,6 +509,45 @@ class CFSecureScanner(CAvScanner):
     self.name = "F-Secure"
     self.speed = AV_SPEED_FAST
     self.pattern = "(.*): Infected: (.*) \[[a-z]+\]"
+# /home/r0x/Downloads/jigsaw: Infected: Trojan.AgentWDCR.GLX [Aquarius]
+
+# -----------------------------------------------------------------------
+class CWindowsDefScanner(CAvScanner):
+  def __init__(self, cfg_parser):
+    CAvScanner.__init__(self, cfg_parser)
+    self.name = "WindowsDefender"
+    self.speed = AV_SPEED_FAST
+    self.pattern = ".* Scanning (.*?)\.{3}.*Threat (.*) identified."
+#EngineScanCallback(): Threat Ransom:MSIL/JigsawLocker.A identified.
+
+  def build_cmd(self, path):
+    parser = self.cfg_parser
+    scan_path = parser.get(self.name, "PATH")
+    scan_args = parser.get(self.name, "ARGUMENTS")
+    args = [scan_path]
+    args.extend(scan_args.replace("$FILE", path).split(" "))
+    return args
+
+  def scan(self, path):
+    if self.pattern is None:
+      Exception("Not implemented")
+
+    try:
+      cmd = self.build_cmd(path)
+    except: # There is no entry in the *.cfg file for this AV engine?
+      pass
+
+    try:
+      output = check_output(cmd, stderr=STDOUT)
+    except CalledProcessError as e:
+      output = e.output
+
+    pattern = self.pattern
+    matches = re.findall(pattern, output, re.IGNORECASE|re.MULTILINE|re.DOTALL)
+    for match in matches:
+      self.results[match[self.file_index]] = match[self.malware_index]
+    return len(self.results) > 0
+
 
 # -----------------------------------------------------------------------
 class CQuickHealScanner(CAvScanner):
@@ -572,7 +611,7 @@ class CMultiAV:
     self.engines = [CFProtScanner,  CComodoScanner,      CEsetScanner,
                     CAviraScanner,  CBitDefenderScanner, CSophosScanner,
                     CAvastScanner,  CAvgScanner,         CDrWebScanner,
-                    CMcAfeeScanner, CIkarusScanner,      CFSecureScanner,
+                    CMcAfeeScanner, CIkarusScanner,      CFSecureScanner, CWindowsDefScanner,
                     CKasperskyScanner, CZavScanner,      CEScanScanner,
                     CCyrenScanner,  CQuickHealScanner,   CTrendmicroScanner]
     if has_clamd:
@@ -656,4 +695,3 @@ class CMultiAV:
       os.unlink(fname)
 
     return ret
-
