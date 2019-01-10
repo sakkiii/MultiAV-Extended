@@ -547,7 +547,10 @@ class CWindowsDefScanner(CAvScanner):
     pattern = self.pattern
     matches = re.findall(pattern, output, re.IGNORECASE|re.MULTILINE|re.DOTALL)
     for match in matches:
-      self.results[match[self.file_index]] = match[self.malware_index]
+      if match[self.malware_index] == '':
+        self.results[match[self.file_index]] = 'Unknown:Win/NameUnknown'
+      else:
+        self.results[match[self.file_index]] = match[self.malware_index]
     return len(self.results) > 0
 
 
@@ -678,6 +681,7 @@ class CMultiAV:
     if av.speed <= max_speed:
       av.scan(path)
       results[av.name] = av.results
+      print("Scan using {0} complete. Result: {1}".format(av.name, av.results))
 
     if q is not None:
       q.put(results)
