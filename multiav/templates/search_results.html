@@ -13,7 +13,8 @@ $def with (rows)
 <li><a href="/" tabindex="1">Upload</a></li>
 <li><a href="/last" tabindex="2">Last reports</a></li>
 <li><a href="/search" tabindex="3">Search reports</a></li>
-<li><a href="http://github.com/joxeankoret/multiav" tabindex="4">Project page</a></li>
+<li><a href="/scanners" tabindex="3">Scanners</a></li>
+<li><a href="http://github.com/danieljampen/multiav" tabindex="4">Project page</a></li>
 <li><a href="/about" tabindex="5">About</a></li>
 </ul>
 </div>
@@ -30,18 +31,22 @@ $for results in rows:
     <table border="1" id="data">
       <tr>
         <th>Antivirus</th>
+        <th>Binary version</th>
+        <th>Engine/data version</th>
         <th>Malware name</th>
       </tr>
-      $for result in results[1]:
-        <tr>
-          <td>$result</td>
-          <td>
-            $if len(results[1][result].values()) > 0:
-              $:"<br/>".join(results[1][result].values())
-            $else:
-              -
-          </td>
-        </tr>
+    $for result in results[1]:
+      <tr>
+        <td>$result</td>
+        <td>$results[1][result]['scanner_binary_version']</td>
+        <td>$results[1][result]['scanner_engine_data_version']</td>
+        <td>
+	  $if len(results[1][result]['result']) > 0:
+            $:"<br/>".join(results[1][result]['result'].values())
+          $else:
+            -
+        </td>
+      </tr>
     </table>
     <hr/>
   </td></tr>
@@ -49,7 +54,7 @@ $for results in rows:
 </table>
 </div>
 <div align="center" id="footer">
-<h2>Copyright (c) 2014, 2015 Joxean Koret</h2>
+  <h2>Copyright (c) 2014, 2015 Joxean Koret, 2019 Daniel Jampen</h2>
 </div>
 </body>
 </html>

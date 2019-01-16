@@ -1,0 +1,68 @@
+$def with (scanservers)
+<html>
+<head>
+<link href="/static/multiav.css" rel="stylesheet" type="text/css">
+</head>
+<body>
+<div align="center">
+<h1>MultiAV</h1>
+</div>
+<div id="vertmenu"> 
+<h1>Navigation</h1>
+<ul>
+<li><a href="/" tabindex="1">Upload</a></li>
+<li><a href="/last" tabindex="2">Last reports</a></li>
+<li><a href="/search" tabindex="3">Search reports</a></li>
+<li><a href="/scanners" tabindex="3">Scanners</a></li>
+<li><a href="http://github.com/danieljampen/multiav" tabindex="4">Project page</a></li>
+<li><a href="/about" tabindex="5">About</a></li>
+</ul>
+</div>
+<div id="content">
+  <h2>Scanners</h2>
+  <form method="POST" action="/scanners" style="float:left;margin-right:10px">
+    <input type="submit" value="Refresh data"/>
+  </form>
+  <form method="POST" action="/update">
+    <input type="submit" value="Update scanners"/>
+  </form>
+  
+<table border="0">
+  $if len(scanservers) > 0:
+    $for server in scanservers:
+      <tr>
+          <td>
+            <h2>Server: $server</h2>
+            <table border="1" id="data">
+              <tr>
+                <th>Antivirus</th>
+                <th>Binary version</th>
+                <th>Engine/data version</th>
+                <th>Active</th>
+                <th>Last update</th>
+                <th>Last data refresh</th>
+              </tr>
+            $for scanner in scanservers[server]:
+              <tr>
+                <td>$scanner.name</td>
+                <td>$scanner.binary_version</td>
+                <td>$scanner.engine_data_version</td>
+                <td>$scanner.active</td>
+                <td>$scanner.last_update_date</td>
+                <td>$scanner.last_refresh_date</td>
+              </tr>
+            </table>
+            <hr/>
+          </td>
+        </tr>
+  $else:
+    <tr>
+      <td><b>No data</b></td>
+    </tr>
+</table>
+</div>
+<div align="center" id="footer">
+  <h2>Copyright (c) 2014, 2015 Joxean Koret, 2019 Daniel Jampen</h2>
+</div>
+</body>
+</html>
