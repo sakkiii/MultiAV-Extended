@@ -68,9 +68,10 @@ class CDbSamples:
   def insert_sample(self, name, buf, reports):
     infected = 0
     for av_name in reports:
-      if reports[av_name]['result'] != {}:
-        infected = 1
-        break
+      if 'result' in reports[av_name]:
+        if reports[av_name]['result'] != {}:
+          infected = 1
+          break
 
     md5_hash = md5(buf).hexdigest()
     sha1_hash = sha1(buf).hexdigest()
@@ -100,9 +101,9 @@ class CDbSamples:
     rows = self.db.query(query, vars={"val":value})
     return rows
 
-  def last_samples(self):
-    query = "SELECT samples.id,samples.name,samples.md5,samples.sha1,samples.sha256,reports.id AS report_id,reports.infected,reports.date,reports.result FROM samples LEFT JOIN reports ON samples.id = reports.sample_id WHERE reports.infected = 1 ORDER BY reports.date desc LIMIT 20"
-    rows = self.db.query(query)
+  def last_samples(self, limit):
+    query = "SELECT samples.id,samples.name,samples.md5,samples.sha1,samples.sha256,reports.id AS report_id,reports.infected,reports.date,reports.result FROM samples LEFT JOIN reports ON samples.id = reports.sample_id WHERE reports.infected = 1 ORDER BY reports.date desc LIMIT $limit"
+    rows = self.db.query(query, vars={'limit': limit})
     return rows
 
   def get_scanners(self):
@@ -126,7 +127,12 @@ class CDbSamples:
 class last:
   def GET(self):
     db = CDbSamples()
-    rows = db.last_samples()
+    if 'limit' in web.input():
+      limit = int(web.input()['limit'])
+    else:
+      limit = 20
+    
+    rows = db.last_samples(limit)
     l = []
     for row in rows:
       l.append([row['name'], json.loads(row['result']), row['md5'], row['sha1'], row['sha256'], row['date']])
@@ -139,7 +145,11 @@ class last:
 class search:
   def GET(self):
     render = web.template.render(TEMPLATE_PATH)
-    return render.search()
+    i = web.input(q="")
+    if i["q"] == "":
+      return render.search()
+    
+    return self.POST()
 
   def POST(self):
     render = web.template.render(TEMPLATE_PATH)
@@ -148,10 +158,12 @@ class search:
       return render.search()
 
     db = CDbSamples()
-    rows = db.search_samples(i["q"])
     l = []
-    for row in rows:
-      l.append([row['name'], json.loads(row['result']), row['md5'], row['sha1'], row['sha256'], row['date']])
+
+    for q in list(set(i["q"].split(','))):
+      rows = db.search_samples(q)
+      for row in rows:
+        l.append([row['name'], json.loads(row['result']), row['md5'], row['sha1'], row['sha256'], row['date']])
 
     if len(l) == 0:
       return render.error("No match")
@@ -183,9 +195,15 @@ class api_search:
       return '{"error": "No file uploaded or invalid file."}'
 
     db_api = CDbSamples()
-    ret = db_api.search_sample(i["file_hash"])
-    for row in ret:
-      return json.dumps(row)
+    l = []
+    for q in list(set(i["file_hash"].split(','))):
+      ret = db_api.search_sample(q)
+      for row in ret:
+        l.append(row)
+
+    if len(l) != 0:
+      return json.dumps(l)
+      
     return '{"error": "Not found."}'
 
 
@@ -210,9 +228,11 @@ class api_upload:
 
     # Scan the file
     av = CMultiAV()
-    report.update(av.scan_buffer(buf))
+    scan_result = av.scan_buffer(buf)
+    report.update(scan_result)
 
-    db_api.insert_sample(filename, buf, report)
+    db_api = CDbSamples()
+    db_api.insert_sample(filename, buf, scan_result)
     return json.dumps(report)
 
 
@@ -238,10 +258,11 @@ class api_upload_fast:
 
     # Scan the file
     av = CMultiAV()
-    report.update(av.scan_buffer(buf, speed))
+    scan_result = av.scan_buffer(buf, speed)
+    report.update(scan_result)
 
     db_api = CDbSamples()
-    db_api.insert_sample(filename, buf, report)
+    db_api.insert_sample(filename, buf, scan_result)
 
     return json.dumps(report)
 

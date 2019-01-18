@@ -103,3 +103,29 @@ h1 {
 #hextable th {
   background-color:#FF9900;
 }
+
+.files {
+  display: flex;
+  flex-flow: row wrap;
+}
+.file-row {
+  display: flex;
+  width:100%;
+  align-items: baseline;
+}
+.file-cell{
+  flex: 1;
+}
+.file-cell:first-child{
+  flex: 2;
+}
+.file-cell:last-child{
+  flex: 0.5;
+}
+.file-row .cancel{
+  color:darkred;
+  cursor:pointer !important;
+}
+.file-row .cancel:hover{
+  color:red;
+}
