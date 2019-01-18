@@ -85,12 +85,15 @@ class CDbSamples:
         sample_id = res[0].id
 
         report_id = self.db.insert('reports', infected=infected, date=time.asctime(), sample_id=sample_id, result=json.dumps(reports) )
-        print "Report inserted", sha1_hash
+        print("Report inserted", sha1_hash)
       except:
-        print "Error:", sys.exc_info()[1], md5_hash, sha1_hash, sha256_hash
+        print("Error:", sys.exc_info()[1], md5_hash, sha1_hash, sha256_hash)
+    
+    # update scanner db
+    self._update_scanner_from_report(reports)
 
   def search_sample(self, file_hash):
-    query = "SELECT samples.id,samples.name,samples.md5,samples.sha1,samples.sha256,reports.id AS report_id,reports.infected,reports.date,reports.result FROM samples LEFT JOIN reports ON samples.id = reports.sample_id WHERE md5=$hash OR sha1=$hash OR sha256=$hash"
+    query = "SELECT samples.id,samples.name,samples.md5,samples.sha1,samples.sha256,reports.id AS report_id,reports.infected,reports.date,reports.result FROM samples LEFT JOIN reports ON samples.id = reports.sample_id WHERE md5=$hash OR sha1=$hash OR sha256=$hash OR samples.name like $hash"
     print(query)
     rows = self.db.query(query, vars={"hash":file_hash})
     print(rows)
@@ -167,8 +170,67 @@ class search:
 
     if len(l) == 0:
       return render.error("No match")
-    return render.search_results(l)
 
+    return render.search_results(l, i['q'])
+
+
+# -----------------------------------------------------------------------
+class export_csv:
+  def GET(self):
+    # get querys
+    i = web.input(q="")
+    if i["q"] == "":
+      render = web.template.render(TEMPLATE_PATH)
+      return render.search()
+    
+    querys = list(set(i["q"].split(',')))
+
+    # execute search
+    db = CDbSamples()
+    headers = {'name', 'md5', 'sha1', 'sha256', 'date'}
+    data = []
+    
+    for query in querys:
+      rows = db.search_samples(query)
+
+      for row in rows:
+        data_row = {}
+        result = json.loads(row['result'])
+
+        for key, value in result.iteritems():
+          dict_key = key + ' ' + \
+                     value['scanner_binary_version'].replace('\n', ' ').replace('\r', '') + \
+                     ' ' + \
+                     value['scanner_engine_data_version'].replace('\n', ' ').replace('\r', '')
+
+          data_row[dict_key] = value['result'] if value['result'] != {} else '-'
+        
+        for key in headers:
+          data_row[key] = row[key]
+
+        data.append(data_row)
+
+    # generate headers
+    for row in data:
+      headers.update(row.keys())
+    
+    # return & generate csv
+    csv = []
+    csv.append(';'.join(headers))
+    for report in data:
+      row = []
+      for key in headers:
+        if key in report:
+          row.append(report[key])
+        else:
+          row.append('-')
+      
+      csv.append(';'.join(row))
+
+    web.header('Content-Type', 'text/csv')
+    web.header('Content-disposition', 'attachment; filename=multi-av-export.csv')
+
+    return '\n'.join(csv)
 
 # -----------------------------------------------------------------------
 class index:

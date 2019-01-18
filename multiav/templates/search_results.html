@@ -1,4 +1,4 @@
-$def with (rows)
+$def with (rows, query)
 <html>
 <head>
 <link href="/static/multiav.css" rel="stylesheet" type="text/css">
@@ -19,6 +19,7 @@ $def with (rows)
 </ul>
 </div>
 <div id="content">
+<a href="/export/csv?q=$query">Export results as csv</a>
 <table border="0">
 $for results in rows:
   <tr><td>
