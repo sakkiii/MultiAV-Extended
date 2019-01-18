@@ -6,7 +6,7 @@ import time
 import web
 from hashlib import md5, sha1, sha256
 from itertools import groupby
-from multiav.core import CMultiAV, AV_SPEED_ALL
+from multiav.core import CMultiAV, AV_SPEED_ALL, AV_SPEED_ULTRA
 
 urls = (
     '/', 'index',
@@ -17,6 +17,7 @@ urls = (
     '/about', 'about',
     '/last', 'last',
     '/search', 'search',
+    '/export/csv', 'export_csv',
     '/scanners', 'scanners',
     '/update', 'update'
 )
@@ -63,7 +64,7 @@ class CDbSamples:
                                                 last_refresh_date text,
                                                 last_update_date text)""")
       except:
-        print "Error:", sys.exc_info()[1]
+        print("Error:", sys.exc_info())[1]
 
   def insert_sample(self, name, buf, reports):
     infected = 0
@@ -113,18 +114,53 @@ class CDbSamples:
     rows = self.db.select("scanners")
     return rows
 
+  def get_scanner(self, name):
+    where = 'name like $name'
+    rows = self.db.select("scanners", where=where, vals={'name': name})
+    return rows
+
   def insert_scanner(self, scanner):
     row = self.db.insert("scanners",name=scanner['name'], server=scanner['server'], binary_version=scanner['binary_version'], \
                           engine_data_version=scanner['engine_data_version'], active=scanner['active'], \
                           last_refresh_date=time.asctime(), last_update_date=scanner['last_update_date'])
     return row
   
+  def _update_scanner_from_report(self, report):
+    for scanner in report:
+      try:
+        updated_rows = self.update_scanner_versions(scanner, 'local',\
+            report[scanner]['scanner_binary_version'], report[scanner]['scanner_engine_data_version'])
+            
+        if updated_rows == 0:
+          self.insert_scanner({
+            'name': scanner, 
+            'server': 'local',
+            'binary_version': report[scanner]['scanner_binary_version'],
+            'engine_data_version': report[scanner]['scanner_engine_data_version'],
+            'active': True,
+            'last_update_date': '-'})
+      except:
+        print("Error:", sys.exc_info())[1]
+  
   def update_scanner(self, scanner):
     where='name = $name and server = $server'
-    row = self.db.update("scanners", vars={"name": scanner['name'], "server": scanner['server']}, where=where, \
+    updated_rows = self.db.update("scanners", vars={"name": scanner['name'], "server": scanner['server']}, where=where, \
                           binary_version=scanner['binary_version'], engine_data_version=scanner['engine_data_version'], \
                           active=scanner['active'], last_refresh_date=time.asctime(), last_update_date=scanner['last_update_date'])
-    return row
+    return updated_rows
+  
+  def update_scanner_versions(self, name, server, binary_version, engine_data_version, last_update_date = None):
+    where='name = $name and server = $server'
+    if last_update_date == None:
+      updated_rows = self.db.update("scanners", vars={"name": name, "server": server}, where=where, \
+                          binary_version=binary_version, engine_data_version=engine_data_version, \
+                          last_refresh_date=time.asctime(), active=True)
+    else:
+      updated_rows = self.db.update("scanners", vars={"name": name, "server": server}, where=where, \
+                          binary_version=binary_version, engine_data_version=engine_data_version, \
+                          last_update_date=last_update_date, last_refresh_date=time.asctime(), active = True)
+
+    return updated_rows
 
 # -----------------------------------------------------------------------
 class last:
@@ -156,6 +192,7 @@ class search:
 
   def POST(self):
     render = web.template.render(TEMPLATE_PATH)
+
     i = web.input(q="")
     if i["q"] == "":
       return render.search()
@@ -265,7 +302,7 @@ class api_search:
 
     if len(l) != 0:
       return json.dumps(l)
-      
+
     return '{"error": "Not found."}'
 
 
@@ -332,6 +369,8 @@ class api_upload_fast:
 # -----------------------------------------------------------------------
 class upload:
   def POST(self):
+    render = web.template.render(TEMPLATE_PATH)
+
     i = web.input(file_upload={})
     if i["file_upload"] is None or i["file_upload"] == "":
       return render.error("No file uploaded or invalid file.")
@@ -354,7 +393,6 @@ class upload:
     db_api.insert_sample(filename, buf, ret)
 
     # And show the results
-    render = web.template.render(TEMPLATE_PATH)
     return render.results(ret, filename, hashes)
 
 # -----------------------------------------------------------------------
@@ -395,22 +433,19 @@ class scanners:
  
     # Update active ones
     for scanner in binary_versions:
-      scanner_last_update_db = filter(lambda x: x.name == scanner, db_scanners)
-      updated_scanner = {
-        'name': scanner, 
-        'server': 'local',
-        'binary_version': binary_versions[scanner],
-        'engine_data_version': engine_data_versions[scanner],
-        'active': True,
-        'last_update_date': scanner_last_update_db[0].last_update_date if len(scanner_last_update_db) == 1 else '-'}
-
       try:
-        if len(scanner_last_update_db) == 1:
-          db_api.update_scanner(updated_scanner)
-        else:
-          db_api.insert_scanner(updated_scanner)
+        rows_updated = db_api.update_scanner_versions(scanner, 'local',  binary_versions[scanner], engine_data_versions[scanner])
+        if rows_updated == 0:
+          db_api.insert_scanner({
+            'name': scanner, 
+            'server': 'local',
+            'binary_version': binary_versions[scanner],
+            'engine_data_version': engine_data_versions[scanner],
+            'active': True,
+            'last_update_date': '-'}
+)
       except:
-        print "Error:", sys.exc_info()[1]
+        print("Error:", sys.exc_info())[1]
 
     return self.GET()
 
@@ -429,27 +464,17 @@ class update:
 
     for server, scanners in groupby(db_scanners, lambda x: x['server']):
       for scanner in scanners:
+        update_successs = update_results[server][scanner.name]['status']
+
         update_results[server][scanner.name]['old_binary_version'] = scanner.binary_version
         update_results[server][scanner.name]['old_engine_data_version'] = scanner.engine_data_version
-        update_results[server][scanner.name]['new_binary_version'] = binary_versions[scanner.name]
-        update_results[server][scanner.name]['new_engine_data_version'] = engine_data_versions[scanner.name]
 
-    # Update DB with new versions
-    for server in update_results:
-      for scanner in update_results[server]:
-        if update_results[server][scanner]['status']:
-          db_scanner = filter(lambda x: x.name == scanner, db_scanners)
-
-          #persist last update time & version
-          updated_scanner = {
-            'name': scanner, 
-            'server': 'local',
-            'binary_version': binary_versions[scanner],
-            'engine_data_version': engine_data_versions[scanner],
-            'active': True,
-            'last_refresh_date': db_scanner[0].last_refresh_date if len(db_scanner) == 1 else '-',
-            'last_update_date': time.asctime()}
-          db_api.update_scanner(updated_scanner)
+        update_results[server][scanner.name]['new_binary_version'] = binary_versions[scanner.name] if update_successs else '-'
+        update_results[server][scanner.name]['new_engine_data_version'] = engine_data_versions[scanner.name] if update_successs else '-'
+        
+        # Update DB with new versions
+        if update_successs:
+          db_api.update_scanner_versions(scanner, 'local', binary_versions[scanner.name], engine_data_versions[scanner.name], time.asctime())
 
     # Show the results
     render = web.template.render(TEMPLATE_PATH)
