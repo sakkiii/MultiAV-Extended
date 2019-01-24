@@ -235,12 +235,13 @@ class export_csv:
         result = json.loads(row['result'])
 
         for key, value in result.iteritems():
-          dict_key = key + ' ' + \
-                     value['scanner_binary_version'].replace('\n', ' ').replace('\r', '') + \
-                     ' ' + \
-                     value['scanner_engine_data_version'].replace('\n', ' ').replace('\r', '')
+          version = value['scanner_binary_version'].replace('\n', ' ').replace('\r', '') + \
+                    ' ' + \
+                    value['scanner_engine_data_version'].replace('\n', ' ').replace('\r', '')
+          result = value['result'][value['result'].keys()[0]] if value['result'] != {} else 'clean'
 
-          data_row[dict_key] = value['result'][value['result'].keys()[0]] if value['result'] != {} else '-'
+          data_row[key] = result
+          data_row[key + '-version'] = version
         
         for key in headers:
           data_row[key] = row[key]
@@ -250,7 +251,7 @@ class export_csv:
   
   def GET(self):
     db = CDbSamples()
-    headers = {'name', 'md5', 'sha1', 'sha256', 'date'}
+    headers = ['name', 'md5', 'sha1', 'sha256', 'date']
     data = []
 
     # get querys
@@ -275,19 +276,28 @@ class export_csv:
 
 
     # generate headers
+    engines = set()
     for row in data:
-      headers.update(row.keys())
-    
+      engines.update(row.keys())
+    engines = list(engines - set(headers))
+    engines.sort()
+
     # return & generate csv
     csv = []
-    csv.append(';'.join(headers))
+    csv.append(';'.join(headers + engines))
     for report in data:
       row = []
       for key in headers:
         if key in report:
           row.append(report[key])
         else:
-          row.append('-')
+          row.append('n/a')
+      
+      for key in engines:
+        if key in report:
+          row.append(report[key])
+        else:
+          row.append('not scanned')
       
       csv.append(';'.join(row))
 
