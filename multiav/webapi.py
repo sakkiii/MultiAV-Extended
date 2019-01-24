@@ -101,13 +101,17 @@ class CDbSamples:
     return rows
 
   def search_samples(self, value):
-    query = "SELECT samples.id,samples.name,samples.md5,samples.sha1,samples.sha256,reports.id AS report_id,reports.infected,reports.date,reports.result FROM samples LEFT JOIN reports ON samples.id = reports.sample_id WHERE md5=$val OR sha1=$val OR sha256=$val OR reports.result like $val OR samples.name like $val"
-    rows = self.db.query(query, vars={"val":value})
-    return rows
+    if value is None:
+      query = "SELECT samples.id,samples.name,samples.md5,samples.sha1,samples.sha256,reports.id AS report_id,reports.infected,reports.date,reports.result FROM samples LEFT JOIN reports ON samples.id = reports.sample_id"
+      return self.db.query(query)
+    else:
+      query = "SELECT samples.id,samples.name,samples.md5,samples.sha1,samples.sha256,reports.id AS report_id,reports.infected,reports.date,reports.result FROM samples LEFT JOIN reports ON samples.id = reports.sample_id WHERE md5=$val OR sha1=$val OR sha256=$val OR reports.result like $val OR samples.name like $val"
+      return self.db.query(query, vars={"val":value})
 
-  def last_samples(self, limit):
-    query = "SELECT samples.id,samples.name,samples.md5,samples.sha1,samples.sha256,reports.id AS report_id,reports.infected,reports.date,reports.result FROM samples LEFT JOIN reports ON samples.id = reports.sample_id WHERE reports.infected = 1 ORDER BY reports.date desc LIMIT $limit"
-    rows = self.db.query(query, vars={'limit': limit})
+  def last_samples(self, limit, page):
+    offset = limit * page
+    query = "SELECT samples.id,samples.name,samples.md5,samples.sha1,samples.sha256,reports.id AS report_id,reports.infected,reports.date,reports.result FROM samples LEFT JOIN reports ON samples.id = reports.sample_id ORDER BY reports.date desc LIMIT $limit OFFSET $offset"
+    rows = self.db.query(query, vars={'limit': limit, 'offset': offset})
     return rows
 
   def get_scanners(self):
@@ -166,18 +170,29 @@ class CDbSamples:
 class last:
   def GET(self):
     db = CDbSamples()
-    if 'limit' in web.input():
-      limit = int(web.input()['limit'])
+    i = web.input()
+    if 'limit' in i:
+      limit = int(i['limit'])
     else:
       limit = 20
     
-    rows = db.last_samples(limit)
+    if 'page' in i:
+      page = int(i['page'])
+    else:
+      page = 0
+    
+    rows = db.last_samples(limit, page)
     l = []
     for row in rows:
       l.append([row['name'], json.loads(row['result']), row['md5'], row['sha1'], row['sha256'], row['date']])
 
+    if page == 0:
+      backpage = 0
+    else:
+      backpage = page -1
+
     render = web.template.render(TEMPLATE_PATH)
-    return render.search_results(l)
+    return render.last(l, backpage, page, page + 1)
 
 
 # -----------------------------------------------------------------------
@@ -213,24 +228,9 @@ class search:
 
 # -----------------------------------------------------------------------
 class export_csv:
-  def GET(self):
-    # get querys
-    i = web.input(q="")
-    if i["q"] == "":
-      render = web.template.render(TEMPLATE_PATH)
-      return render.search()
-    
-    querys = list(set(i["q"].split(',')))
-
-    # execute search
-    db = CDbSamples()
-    headers = {'name', 'md5', 'sha1', 'sha256', 'date'}
+  def process_query_result(self, rows, headers):
     data = []
-    
-    for query in querys:
-      rows = db.search_samples(query)
-
-      for row in rows:
+    for row in rows:
         data_row = {}
         result = json.loads(row['result'])
 
@@ -240,12 +240,39 @@ class export_csv:
                      ' ' + \
                      value['scanner_engine_data_version'].replace('\n', ' ').replace('\r', '')
 
-          data_row[dict_key] = value['result'] if value['result'] != {} else '-'
+          data_row[dict_key] = value['result'][value['result'].keys()[0]] if value['result'] != {} else '-'
         
         for key in headers:
           data_row[key] = row[key]
 
         data.append(data_row)
+    return data
+  
+  def GET(self):
+    db = CDbSamples()
+    headers = {'name', 'md5', 'sha1', 'sha256', 'date'}
+    data = []
+
+    # get querys
+    i = web.input(q="", l="", p="")
+    if i["q"] != "":    
+      querys = list(set(i["q"].split(',')))
+
+      # execute search   
+      for query in querys:
+        rows = db.search_samples(query)
+        data += self.process_query_result(rows, headers)
+
+    elif i["l"] != "" and i["p"] != "":
+      limit = int(i["l"])
+      page = int(i["p"])
+      rows = db.last_samples(limit, page)
+      data += self.process_query_result(rows, headers)
+
+    else:
+      rows = db.search_samples(None)
+      data += self.process_query_result(rows, headers)
+
 
     # generate headers
     for row in data:

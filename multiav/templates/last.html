@@ -1,4 +1,4 @@
-$def with (rows, query)
+$def with (rows, backpage, page, nextpage)
 <html>
 <head>
 <link href="/static/multiav.css" rel="stylesheet" type="text/css">
@@ -19,7 +19,11 @@ $def with (rows, query)
 </ul>
 </div>
 <div id="content">
-Actions: <a href="/export/csv?q=$query">Export results as csv</a>
+Actions: <a href="/export/csv?l=20p=$page">Export shown results as csv</a>&nbsp;<a href="/export/csv">Export all stored results as csv</a>
+<br />
+<hr />
+Page Navigation: <a href="/last?page=$backpage"><< Back</a>&nbsp;<a href="/last?page=$nextpage">Next >></a>
+<hr />
 <table border="0">
 $for results in rows:
   <tr><td>
