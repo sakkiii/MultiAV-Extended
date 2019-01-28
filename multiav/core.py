@@ -860,7 +860,7 @@ class CMultiAV:
   def single_scan(self, path, max_speed=AV_SPEED_ALL):
     results = {}
     for av_engine in self.engines:
-      results = self.scan_one(av_engine, path, results, max_speed)
+      results.update(self.scan_one(av_engine, path, results, max_speed))
     return results
 
   def scan_one(self, av_engine, path, results, max_speed, q=None):
