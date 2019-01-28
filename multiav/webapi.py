@@ -110,7 +110,7 @@ class CDbSamples:
 
   def last_samples(self, limit, page):
     offset = limit * page
-    query = "SELECT samples.id,samples.name,samples.md5,samples.sha1,samples.sha256,reports.id AS report_id,reports.infected,reports.date,reports.result FROM samples LEFT JOIN reports ON samples.id = reports.sample_id ORDER BY reports.date desc LIMIT $limit OFFSET $offset"
+    query = "SELECT samples.id,samples.name,samples.md5,samples.sha1,samples.sha256,reports.id AS report_id,reports.infected,reports.date,reports.result FROM samples LEFT JOIN reports ON samples.id = reports.sample_id ORDER BY reports.id desc LIMIT $limit OFFSET $offset"
     rows = self.db.query(query, vars={'limit': limit, 'offset': offset})
     return rows
 
