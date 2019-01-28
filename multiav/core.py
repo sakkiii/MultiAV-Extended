@@ -370,7 +370,29 @@ class CClamScanner(CAvScanner):
     parser = self.cfg_parser
     ep = parser.get(self.name, "UNIX_SOCKET")
 
-    pyclamd.init_unix_socket(filename=ep)
+    clamav_running = False
+    retry_counter = 0
+    while retry_counter < 5 and not clamav_running:
+      try:
+        pyclamd.init_unix_socket(filename=ep)
+        clamav_running = True
+      except pyclamd.ConnectionError as e:
+        # clamav-daemon is down
+        parser = self.cfg_parser
+        try:
+          cmd = parser.get(self.name, "RESTART_CMD")
+          cmd = cmd.split(" ")
+          ouptut = check_output(cmd)
+          time.sleep(15)
+          print("clamav-daemon restarted. Try {0}. Output {1}".format(retry_counter, ouptut))
+          retry_counter += 1
+        except ConfigParser.NoOptionError:
+          print("clamav-daemon is down and no restart command is configured")
+          return False
+        except Exception as e:
+          print("could not restart clamav-daemon. Error {0}".format(e))
+          return False
+    
     if os.path.isdir(path):
       self.scan_dir(path)
     else:
