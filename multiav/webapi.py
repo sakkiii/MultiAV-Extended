@@ -6,7 +6,8 @@ import time
 import web
 from hashlib import md5, sha1, sha256
 from itertools import groupby
-from multiav.core import CMultiAV, AV_SPEED_ALL, AV_SPEED_ULTRA
+from multiprocessing import cpu_count
+from multiav.core import CMultiAV, AV_SPEED, PLUGIN_TYPE, EnumEncoder
 
 urls = (
     '/', 'index',
@@ -18,7 +19,6 @@ urls = (
     '/last', 'last',
     '/search', 'search',
     '/export/csv', 'export_csv',
-    '/scanners', 'scanners',
     '/update', 'update'
 )
 
@@ -29,7 +29,6 @@ TEMPLATE_PATH = os.path.join(os.path.dirname(__file__), 'templates')
 
 if not os.path.isdir(os.path.join(CURRENT_PATH, 'static')):
     raise Exception('runserver.py must be run in the directory {0}'.format(ROOT_PATH))
-
 
 # -----------------------------------------------------------------------
 class CDbSamples:
@@ -46,7 +45,8 @@ class CDbSamples:
                                                 name text,
                                                 md5 text unique,
                                                 sha1 text unique,
-                                                sha256 text unique)""")
+                                                sha256 text unique,
+                                                size text)""")
         self.db.query("""create table if not exists reports(
                                                 id integer not null primary key autoincrement,
                                                 sample_id integer,
@@ -57,60 +57,76 @@ class CDbSamples:
         self.db.query("""create table if not exists scanners(
                                                 id integer not null primary key autoincrement,
                                                 name text,
-                                                server text,
-                                                binary_version text,
-                                                engine_data_version text,
-                                                active integer,
-                                                last_refresh_date text,
-                                                last_update_date text)""")
+                                                plugin_type integer,
+                                                signature_version text,
+                                                engine_version text,
+                                                has_internet integer,
+                                                active integer)""")
       except:
         print("Error:", sys.exc_info())[1]
 
-  def insert_sample(self, name, buf, reports):
-    infected = 0
+  def insert_sample_report(self, name, buf, reports):
+    # calculate infected percentage
+    result_clean = 0
     for av_name in reports:
       if 'result' in reports[av_name]:
         if reports[av_name]['result'] != {}:
-          infected = 1
-          break
+          result_clean += 1
 
+    if result_clean == 0:
+      infected = 0
+    else:
+      infected = ( result_clean / len(reports) ) * 100
+
+    # calculate file properties
     md5_hash = md5(buf).hexdigest()
     sha1_hash = sha1(buf).hexdigest()
     sha256_hash = sha256(buf).hexdigest()
+    size = len(buf)
 
     with self.db.transaction():
       try:
-        query = "INSERT INTO samples(name, md5, sha1, sha256) SELECT $name, $md5, $sha1, $sha256 WHERE NOT EXISTS(SELECT 1 FROM samples WHERE sha256 = $sha256)"
-        insert_ret = self.db.query(query, vars={"name":name, "md5": md5_hash, "sha1": sha1_hash, "sha256": sha256_hash})
-        res = self.search_sample(sha256_hash)
+        # insert sample if not exists
+        query = "INSERT INTO samples(name, md5, sha1, sha256, size) SELECT $name, $md5, $sha1, $sha256, $size WHERE NOT EXISTS(SELECT 1 FROM samples WHERE sha256 = $sha256)"
+        self.db.query(query, vars={"name":name, "md5": md5_hash, "sha1": sha1_hash, "sha256": sha256_hash, "size": size})
+        
+        # get sample id
+        res = self.search_sample_by_hash(sha256_hash)
         sample_id = res[0].id
 
-        report_id = self.db.insert('reports', infected=infected, date=time.asctime(), sample_id=sample_id, result=json.dumps(reports) )
-        print("Report inserted", sha1_hash)
+        # insert report with sample_id
+        report_id = self.db.insert('reports', infected=infected, date=time.asctime(), sample_id=sample_id, result=json.dumps(reports, cls=EnumEncoder) )
+
+        return report_id
       except:
         print("Error:", sys.exc_info()[1], md5_hash, sha1_hash, sha256_hash)
-    
-    # update scanner db
-    self._update_scanner_from_report(reports)
+        return -1
 
-  def search_sample(self, file_hash):
-    query = "SELECT samples.id,samples.name,samples.md5,samples.sha1,samples.sha256,reports.id AS report_id,reports.infected,reports.date,reports.result FROM samples LEFT JOIN reports ON samples.id = reports.sample_id WHERE md5=$hash OR sha1=$hash OR sha256=$hash OR samples.name like $hash"
-    print(query)
+  def search_report_by_id(self, report_id):
+    query = "SELECT samples.id,samples.name,samples.md5,samples.sha1,samples.sha256,samples.size,reports.id AS report_id,reports.infected,reports.date,reports.result FROM samples LEFT JOIN reports ON samples.id = reports.sample_id WHERE report_id = $report_id"
+    rows = self.db.query(query, vars={"report_id": report_id})
+    return rows
+
+  def search_sample_by_hash(self, file_hash):
+    query = "SELECT samples.id,samples.name,samples.md5,samples.sha1,samples.sha256,samples.size,reports.id AS report_id,reports.infected,reports.date,reports.result FROM samples LEFT JOIN reports ON samples.id = reports.sample_id WHERE md5=$hash OR sha1=$hash OR sha256=$hash OR samples.name like $hash"
     rows = self.db.query(query, vars={"hash":file_hash})
-    print(rows)
     return rows
 
   def search_samples(self, value):
     if value is None:
-      query = "SELECT samples.id,samples.name,samples.md5,samples.sha1,samples.sha256,reports.id AS report_id,reports.infected,reports.date,reports.result FROM samples LEFT JOIN reports ON samples.id = reports.sample_id"
+      query = "SELECT samples.id,samples.name,samples.md5,samples.sha1,samples.sha256,samples.size,reports.id AS report_id,reports.infected,reports.date,reports.result FROM samples LEFT JOIN reports ON samples.id = reports.sample_id"
       return self.db.query(query)
     else:
-      query = "SELECT samples.id,samples.name,samples.md5,samples.sha1,samples.sha256,reports.id AS report_id,reports.infected,reports.date,reports.result FROM samples LEFT JOIN reports ON samples.id = reports.sample_id WHERE md5=$val OR sha1=$val OR sha256=$val OR reports.result like $val OR samples.name like $val"
+      query = "SELECT samples.id,samples.name,samples.md5,samples.sha1,samples.sha256,samples.size,reports.id AS report_id,reports.infected,reports.date,reports.result FROM samples LEFT JOIN reports ON samples.id = reports.sample_id WHERE md5=$val OR sha1=$val OR sha256=$val OR reports.result like $val OR samples.name like $val"
       return self.db.query(query, vars={"val":value})
+
+  def count_reports(self):
+      query = "SELECT COUNT(*) FROM reports"
+      return int(list(self.db.query(query))[0]["COUNT(*)"])
 
   def last_samples(self, limit, page):
     offset = limit * page
-    query = "SELECT samples.id,samples.name,samples.md5,samples.sha1,samples.sha256,reports.id AS report_id,reports.infected,reports.date,reports.result FROM samples LEFT JOIN reports ON samples.id = reports.sample_id ORDER BY reports.id desc LIMIT $limit OFFSET $offset"
+    query = "SELECT samples.id,samples.name,samples.md5,samples.sha1,samples.sha256,samples.size,reports.id AS report_id,reports.infected,reports.date,reports.result FROM samples LEFT JOIN reports ON samples.id = reports.sample_id ORDER BY reports.id desc LIMIT $limit OFFSET $offset"
     rows = self.db.query(query, vars={'limit': limit, 'offset': offset})
     return rows
 
@@ -123,48 +139,104 @@ class CDbSamples:
     rows = self.db.select("scanners", where=where, vals={'name': name})
     return rows
 
-  def insert_scanner(self, scanner):
-    row = self.db.insert("scanners",name=scanner['name'], server=scanner['server'], binary_version=scanner['binary_version'], \
-                          engine_data_version=scanner['engine_data_version'], active=scanner['active'], \
-                          last_refresh_date=time.asctime(), last_update_date=scanner['last_update_date'])
-    return row
-  
-  def _update_scanner_from_report(self, report):
-    for scanner in report:
-      try:
-        updated_rows = self.update_scanner_versions(scanner, 'local',\
-            report[scanner]['scanner_binary_version'], report[scanner]['scanner_engine_data_version'])
-            
-        if updated_rows == 0:
-          self.insert_scanner({
-            'name': scanner, 
-            'server': 'local',
-            'binary_version': report[scanner]['scanner_binary_version'],
-            'engine_data_version': report[scanner]['scanner_engine_data_version'],
-            'active': True,
-            'last_update_date': '-'})
-      except:
-        print("Error:", sys.exc_info())[1]
-  
-  def update_scanner(self, scanner):
-    where='name = $name and server = $server'
-    updated_rows = self.db.update("scanners", vars={"name": scanner['name'], "server": scanner['server']}, where=where, \
-                          binary_version=scanner['binary_version'], engine_data_version=scanner['engine_data_version'], \
-                          active=scanner['active'], last_refresh_date=time.asctime(), last_update_date=scanner['last_update_date'])
-    return updated_rows
-  
-  def update_scanner_versions(self, name, server, binary_version, engine_data_version, last_update_date = None):
-    where='name = $name and server = $server'
-    if last_update_date == None:
-      updated_rows = self.db.update("scanners", vars={"name": name, "server": server}, where=where, \
-                          binary_version=binary_version, engine_data_version=engine_data_version, \
-                          last_refresh_date=time.asctime(), active=True)
+  def insert_scanner(self, name, plugin_type, has_internet, signature_version, engine_version, active):
+    if type(plugin_type) is PLUGIN_TYPE:
+      plugin_type_value = plugin_type.value
     else:
-      updated_rows = self.db.update("scanners", vars={"name": name, "server": server}, where=where, \
-                          binary_version=binary_version, engine_data_version=engine_data_version, \
-                          last_update_date=last_update_date, last_refresh_date=time.asctime(), active = True)
+      plugin_type_value = plugin_type
+      
+    row = self.db.insert("scanners",name=name, plugin_type=plugin_type_value, has_internet=has_internet, \
+                          signature_version=str(signature_version), engine_version=str(engine_version), active=active)
+    return row
+    
+  def update_scanner(self, name, plugin_type, has_internet, signature_version, engine_version = None):
+    if type(plugin_type) is PLUGIN_TYPE:
+      plugin_type_value = plugin_type.value
+    else:
+      plugin_type_value = plugin_type
+    
+    where='name = $name'
+    
+    if engine_version is not None:
+      updated_rows = self.db.update("scanners", vars={"name": name}, where=where, \
+                          plugin_type=plugin_type_value, has_internet=has_internet, \
+                          signature_version=str(signature_version), engine_version=str(engine_version))
+    else:
+      updated_rows = self.db.update("scanners", vars={"name": name}, where=where, \
+                          plugin_type=plugin_type_value, has_internet=has_internet, \
+                          signature_version=str(signature_version))
+    
+    # insert new scanner if none existed)
+    if updated_rows == 0:
+      self.insert_scanner(name, plugin_type, has_internet, signature_version, engine_version if engine_version is not None else "-", True)
 
     return updated_rows
+
+  def update_scanner_active(self, name, active):
+    where='name = $name'
+    updated_rows = self.db.update("scanners", vars={"name": name}, where=where, active=active)
+    return updated_rows
+
+# -----------------------------------------------------------------------
+def convert_result_rows_to_ui_datastructure(rows):
+  result_array = []
+  for scan_result in rows:
+        # calculate additionally used data and setup result object
+        result = {
+          "date": scan_result['date'],
+          "hashes": {
+            "md5": scan_result['md5'],
+            "sha1": scan_result['sha1'],
+            "sha256": scan_result['sha256']
+          },
+          "file": {
+            "name": scan_result['name'],
+            "size": scan_result['size'],
+          },
+          "statistics": {
+            "engine_count": 0,
+            "engine_detected_count":0
+          }
+        }
+        
+        for plugin_type in PLUGIN_TYPE:
+          result[plugin_type] = {}
+
+        # sort results by plugin_type
+        result_data = json.loads(scan_result['result'])
+        for plugin_name in result_data.keys():
+          # store result
+          plugin_type = PLUGIN_TYPE(result_data[plugin_name]["plugin_type"])
+          result[plugin_type][plugin_name] = result_data[plugin_name]
+
+          if plugin_type == PLUGIN_TYPE.AV or plugin_type == PLUGIN_TYPE.LEGACY:
+            # update statistics
+            has_error, error = result_has_error(result_data[plugin_name])
+            if not has_error:
+              result["statistics"]["engine_count"] += 1
+
+              if result_data[plugin_name]["infected"]:
+                result["statistics"]["engine_detected_count"] += 1
+
+        if result["statistics"]["engine_count"] != 0:
+          result["statistics"]["infected"] = int(float(result["statistics"]["engine_detected_count"]) / float(result["statistics"]["engine_count"]) * 100)
+        else:
+          result["statistics"]["infected"] = 0
+        result_array.append(result)
+
+  return result_array
+
+def plugin_type_to_string(plugin_type):
+  return PLUGIN_TYPE(plugin_type).name.lower()
+
+def result_has_error(result):
+  if not "error" in result.keys():
+    return (False, None)
+  
+  if result["error"] == "":
+    return (False, None)
+  
+  return (True, result["error"])
 
 # -----------------------------------------------------------------------
 class last:
@@ -177,53 +249,129 @@ class last:
       limit = 20
     
     if 'page' in i:
-      page = int(i['page'])
+      page = int(i['page']) - 1
+      if page < 0:
+        page = 0
     else:
       page = 0
     
     rows = db.last_samples(limit, page)
-    l = []
-    for row in rows:
-      l.append([row['name'], json.loads(row['result']), row['md5'], row['sha1'], row['sha256'], row['date']])
+    result_array = convert_result_rows_to_ui_datastructure(rows)
 
-    if page == 0:
-      backpage = 0
+    # calculate the pagination stuff
+    total_reports_count = db.count_reports()
+    total_pages = int(total_reports_count / limit)
+
+    nextpage = page + 1
+    if nextpage > total_pages:
+      nextpage = total_pages
+      print(nextpage)
+
+    pagination = {
+      "backpage": 0,
+      "backpage_disabled": False,
+      "currentpage": page + 1,
+      "nextpage": nextpage,
+      "nextpage_disabled": False
+    }
+
+    pagenumbers = {0}
+    if page > 1:
+      pagenumbers.add(page)
+        
+    if total_pages > 1 and total_pages != page + 1:
+      pagenumbers.add(total_pages - 1)
     else:
-      backpage = page -1
+      pagination["nextpage_disabled"] = True
+    
 
-    render = web.template.render(TEMPLATE_PATH)
-    return render.last(l, backpage, page, page + 1)
+    # show next 2 page numbers
+    max_pages_to_add = 2
+    added_pages = 0
+    for i in range(page,total_pages):
+      if added_pages > max_pages_to_add:
+        break
+      pagenumbers.add(i)
+      added_pages += 1
+
+    # show last 2 page numbers
+    added_pages = 0
+    for i in range(page - max_pages_to_add,page):
+      if added_pages > max_pages_to_add:
+        break
+      
+      if i <= 0:
+        continue
+
+      pagenumbers.add(i)
+      added_pages += 1
+
+    # increase all added numbers by one => ui => page 0 = page 1
+    pagination["pages"] = sorted(map(lambda page: page + 1, pagenumbers))
+
+    if page + 1 == 1:
+      pagination["backpage"] = 1
+      pagination["backpage_disabled"] = True
+    else:
+      # page + 1 - 1 = page
+      pagination["backpage"] = page
+
+    render = web.template.render(TEMPLATE_PATH, globals={ 
+      "type": type, 
+      "map": map,
+      "sorted": sorted, 
+      "result_has_error": result_has_error, 
+      "PLUGIN_TYPE": PLUGIN_TYPE })
+    return render.last(result_array, pagination)
 
 
 # -----------------------------------------------------------------------
 class search:
   def GET(self):
-    render = web.template.render(TEMPLATE_PATH)
-    i = web.input(q="")
-    if i["q"] == "":
-      return render.search()
+    # support search using GET parameters
+    i = web.input(q="", id="")
+    if i["q"] != "" or i["id"] != "":
+      return self.POST()
     
-    return self.POST()
+    # show search mask
+    render = web.template.render(TEMPLATE_PATH)
+    return render.search(None)
 
   def POST(self):
-    render = web.template.render(TEMPLATE_PATH)
+    render = web.template.render(TEMPLATE_PATH, globals={ 
+      "type": type,
+      "map": map,
+      "sorted": sorted, 
+      "result_has_error": result_has_error, 
+      "plugin_type_to_string": plugin_type_to_string, 
+      "PLUGIN_TYPE": PLUGIN_TYPE })
 
-    i = web.input(q="")
-    if i["q"] == "":
-      return render.search()
-
+    # Get querys from params
     db = CDbSamples()
-    l = []
+    querylist = []
+    search = None
 
-    for q in list(set(i["q"].split(','))):
-      rows = db.search_samples(q)
-      for row in rows:
-        l.append([row['name'], json.loads(row['result']), row['md5'], row['sha1'], row['sha256'], row['date']])
+    i = web.input(q="", id="")
+    if i["q"] != "":
+      querylist = i["q"].split(',')
+      search = db.search_samples
+    elif i["id"] != "":
+      querylist = i["id"].split(',')
+      search = db.search_report_by_id
+    else:
+      return render.search(None)
 
-    if len(l) == 0:
-      return render.error("No match")
+    # perform search
+    result_array = []
 
-    return render.search_results(l, i['q'])
+    for query in list(set(querylist)):
+      rows = search(query)
+      result_array += convert_result_rows_to_ui_datastructure(rows)
+
+    if len(result_array) == 0:
+      return render.search("No match")
+
+    return render.search_results(result_array, ','.join(querylist))
 
 
 # -----------------------------------------------------------------------
@@ -235,13 +383,27 @@ class export_csv:
         result = json.loads(row['result'])
 
         for key, value in result.iteritems():
-          version = value['scanner_binary_version'].replace('\n', ' ').replace('\r', '') + \
-                    ' ' + \
-                    value['scanner_engine_data_version'].replace('\n', ' ').replace('\r', '')
-          result = value['result'][value['result'].keys()[0]] if value['result'] != {} else 'clean'
+          if value["plugin_type"] == PLUGIN_TYPE.LEGACY or value["plugin_type"] == PLUGIN_TYPE.AV:
+            version = value['engine'].replace('\n', ' ').replace('\r', '') + \
+                      ' ' + \
+                      value['updated'].replace('\n', ' ').replace('\r', '')
 
-          data_row[key] = result
-          data_row[key + '-version'] = version
+            has_error, error = result_has_error(value)
+
+            if has_error:
+              result = error
+            else:
+              # e.g. fsecure' returning results of 2 engines
+              if "results" in value.keys():
+                result = " ".join(value['results'].values())
+              else:
+                result = value['result'] if value['result'] != "" else 'clean'
+
+            data_row[key] = result
+            data_row[key + '-version'] = version
+
+          else:
+            data_row[key] = json.dumps(value, cls=EnumEncoder)
         
         for key in headers:
           data_row[key] = row[key]
@@ -309,8 +471,11 @@ class export_csv:
 # -----------------------------------------------------------------------
 class index:
   def GET(self):
-    render = web.template.render(TEMPLATE_PATH)
-    return render.index()
+    db_api = CDbSamples()
+    db_scanners = db_api.get_scanners().list()
+
+    render = web.template.render(TEMPLATE_PATH, globals={"sorted": sorted, "plugin_type_to_string": plugin_type_to_string})
+    return render.index(db_scanners, cpu_count())
 
 
 # -----------------------------------------------------------------------
@@ -333,12 +498,12 @@ class api_search:
     db_api = CDbSamples()
     l = []
     for q in list(set(i["file_hash"].split(','))):
-      ret = db_api.search_sample(q)
+      ret = db_api.search_samples(q)
       for row in ret:
         l.append(row)
 
     if len(l) != 0:
-      return json.dumps(l)
+      return json.dumps(l, cls=EnumEncoder)
 
     return '{"error": "Not found."}'
 
@@ -353,29 +518,53 @@ class api_upload:
     buf = i["file_upload"].value
     filename = i["file_upload"].filename
 
-    # Calculate the hashes
+    # Setup the report
     report = {
         "hashes": {
-            "md5": md5(buf).hexdigest(),
-            "sha1": sha1(buf).hexdigest(),
-            "sha256": sha256(buf).hexdigest()
+          "md5": md5(buf).hexdigest(),
+          "sha1": sha1(buf).hexdigest(),
+          "sha256": sha256(buf).hexdigest()
+        },
+        "file": {
+          "name": filename,
+          "size": len(buf),
         }
     }
 
     # Scan the file
     av = CMultiAV()
-    scan_result = av.scan_buffer(buf)
-    report.update(scan_result)
+    scan_results = av.scan_buffer(buf)
+    print("webapi: scan complete")
+    report.update(scan_results)
+    print("webapi: update report dict complete")
 
+    # Persist result to db
     db_api = CDbSamples()
-    db_api.insert_sample(filename, buf, scan_result)
-    return json.dumps(report)
+    print("webapi: starting insert")
+    report["id"] = db_api.insert_sample_report(filename, buf, scan_results)
+    print("webapi: insert complete")
+
+    # Update scanner db
+    print("webapi: starting scanner db update")
+    for scanner_name in scan_results:
+      if "error" in scan_results[scanner_name]:
+        continue
+      
+      signature_version = scan_results[scanner_name]["updated"] if "updated" in scan_results[scanner_name] else "-"
+      engine_version = scan_results[scanner_name]["engine"] if "engine" in scan_results[scanner_name] else "-"
+      plugin_type = scan_results[scanner_name]["plugin_type"]
+      has_internet = scan_results[scanner_name]["has_inernet"]
+
+      db_api.update_scanner(scanner_name, plugin_type, has_internet, signature_version, engine_version)
+
+    print("webapi: scanner db update complete")
+    return json.dumps(report, cls=EnumEncoder)
 
 
 # -----------------------------------------------------------------------
 class api_upload_fast:
   def POST(self):
-    i = web.input(file_upload={}, speed=AV_SPEED_ULTRA)
+    i = web.input(file_upload={}, speed=AV_SPEED.ULTRA)
     if i["file_upload"] is None or i["file_upload"] == "":
       return "{'error':'No file uploaded or invalid file.'}"
 
@@ -383,24 +572,38 @@ class api_upload_fast:
     buf = i["file_upload"].value
     filename = i["file_upload"].filename
 
-    # Calculate the hashes
+    # Setup the report
     report = {
         "hashes": {
-            "md5": md5(buf).hexdigest(),
-            "sha1": sha1(buf).hexdigest(),
-            "sha256": sha256(buf).hexdigest()
+          "md5": md5(buf).hexdigest(),
+          "sha1": sha1(buf).hexdigest(),
+          "sha256": sha256(buf).hexdigest()
+        },
+        "file": {
+          "name": filename,
+          "size": len(buf),
         }
     }
 
     # Scan the file
     av = CMultiAV()
-    scan_result = av.scan_buffer(buf, speed)
-    report.update(scan_result)
+    scan_results = av.scan_buffer(buf, speed)
+    report.update(scan_results)
 
+    # Persist results to db
     db_api = CDbSamples()
-    db_api.insert_sample(filename, buf, scan_result)
+    report["id"] = db_api.insert_sample_report(filename, buf, scan_results)
 
-    return json.dumps(report)
+    # Update scanner db
+    for scanner_name in scan_results:
+      signature_version = scan_results[scanner_name]["updated"] if "updated" in scan_results[scanner_name] else "-"
+      engine_version = scan_results[scanner_name]["engine"] if "engine" in scan_results[scanner_name] else "-"
+      plugin_type = scan_results[scanner_name]["plugin_type"]
+      has_internet = scan_results[scanner_name]["has_inernet"]
+
+      db_api.update_scanner(scanner_name, plugin_type, has_internet, signature_version, engine_version)
+
+    return json.dumps(report, cls=EnumEncoder)
 
 
 # -----------------------------------------------------------------------
@@ -417,74 +620,36 @@ class upload:
 
     # Scan the file
     av = CMultiAV()
-    ret = av.scan_buffer(buf)
+    scan_results = av.scan_buffer(buf)
 
     # Calculate the hashes
-    hashes = []
-    hashes.append(md5(buf).hexdigest())
-    hashes.append(sha1(buf).hexdigest())
-    hashes.append(sha256(buf).hexdigest())
+    hashes = {
+      "md5": md5(buf).hexdigest(),
+      "sha1": sha1(buf).hexdigest(),
+      "sha256": sha256(buf).hexdigest()
+    }
 
-    # Save the sample
+    # File properties
+    file_properties = {
+      "name": filename,
+      "size": len(buf)
+    }
+
+    # Persist results to db
     db_api = CDbSamples()
-    db_api.insert_sample(filename, buf, ret)
+    report_id = db_api.insert_sample_report(filename, buf, scan_results)
+
+    # Update scanner db
+    for scanner_name in scan_results:
+      signature_version = scan_results[scanner_name]["updated"] if "updated" in scan_results[scanner_name] else "-"
+      engine_version = scan_results[scanner_name]["engine"] if "engine" in scan_results[scanner_name] else "-"
+      plugin_type = scan_results[scanner_name]["plugin_type"]
+      has_internet = scan_results[scanner_name]["has_inernet"]
+
+      db_api.update_scanner(scanner_name, plugin_type, has_internet, signature_version, engine_version)
 
     # And show the results
-    return render.results(ret, filename, hashes)
-
-# -----------------------------------------------------------------------
-class scanners:
-  def GET(self):
-    # Get the scanners from db
-    db_api = CDbSamples()
-    rows = db_api.get_scanners()
-
-    # Groupby server
-    scanservers = {}
-    for server, scanners in groupby(rows, lambda x: x['server']):
-      if not server in scanservers:
-        scanservers[server] = []
-
-      for scanner in scanners:
-        scanservers[server].append(scanner) 
-
-    # And show the results
-    render = web.template.render(TEMPLATE_PATH)
-    return render.scanners(scanservers)
-
-  def POST(self):
-    # Get the scanners from db
-    db_api = CDbSamples()
-    db_scanners = db_api.get_scanners().list()
-
-    # Get current versions from API
-    av = CMultiAV()
-    binary_versions = av.get_binary_versions()['local']
-    engine_data_versions = av.get_engine_data_versions()['local']
-
-    # Set inactive ones
-    for scanner in db_scanners:
-      if not scanner['name'] in binary_versions:
-        scanner['active'] = False
-        db_api.update_scanner(scanner)
- 
-    # Update active ones
-    for scanner in binary_versions:
-      try:
-        rows_updated = db_api.update_scanner_versions(scanner, 'local',  binary_versions[scanner], engine_data_versions[scanner])
-        if rows_updated == 0:
-          db_api.insert_scanner({
-            'name': scanner, 
-            'server': 'local',
-            'binary_version': binary_versions[scanner],
-            'engine_data_version': engine_data_versions[scanner],
-            'active': True,
-            'last_update_date': '-'}
-)
-      except:
-        print("Error:", sys.exc_info())[1]
-
-    return self.GET()
+    return render.results(report_id, scan_results, hashes, file_properties)
 
 # -----------------------------------------------------------------------
 class update:
@@ -492,27 +657,26 @@ class update:
     # Update
     av = CMultiAV()
     update_results = av.update()
-    binary_versions = av.get_binary_versions()['local']
-    engine_data_versions = av.get_engine_data_versions()['local']
 
     # Set old / new versions in result
     db_api = CDbSamples()
     db_scanners = db_api.get_scanners().list()
 
-    for server, scanners in groupby(db_scanners, lambda x: x['server']):
-      for scanner in scanners:
-        update_successs = update_results[server][scanner.name]['status']
+    # Update DB with new versions
+    for scanner in db_scanners:
+      if not scanner.name in update_results:
+        db_api.update_scanner_active(scanner.name, False)
+    
+    for scanner in update_results:
+      update_successs = update_results[scanner]['status'] != "error"
+      
+      if update_successs:
+        plugin_type = update_results[scanner]["plugin_type"]
+        has_internet = update_results[scanner]["has_inernet"]
+        signature_version = update_results[scanner]["signature_version"]
 
-        update_results[server][scanner.name]['old_binary_version'] = scanner.binary_version
-        update_results[server][scanner.name]['old_engine_data_version'] = scanner.engine_data_version
-
-        update_results[server][scanner.name]['new_binary_version'] = binary_versions[scanner.name] if update_successs else '-'
-        update_results[server][scanner.name]['new_engine_data_version'] = engine_data_versions[scanner.name] if update_successs else '-'
-        
-        # Update DB with new versions
-        if update_successs:
-          db_api.update_scanner_versions(scanner, 'local', binary_versions[scanner.name], engine_data_versions[scanner.name], time.asctime())
+        db_api.update_scanner(scanner, plugin_type, has_internet, signature_version)
 
     # Show the results
-    render = web.template.render(TEMPLATE_PATH)
+    render = web.template.render(TEMPLATE_PATH, globals={"sorted": sorted, "plugin_type_to_string": plugin_type_to_string})
     return render.update(update_results)

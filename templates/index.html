@@ -1,0 +1,132 @@
+<html>
+<head>
+<link href="/static/multiav.css" rel="stylesheet" type="text/css">
+<link href="/static/dropzone.css" rel="stylesheet" type="text/css">
+<script src="/static/dropzone.js"></script>
+</head>
+<body>
+<div align="center">
+<h1>MultiAV</h1>
+</div>
+<div id="vertmenu"> 
+<h1>Navigation</h1>
+<ul>
+<li><a href="/" tabindex="1">Upload</a></li>
+<li><a href="/last" tabindex="2">Last reports</a></li>
+<li><a href="/search" tabindex="3">Search reports</a></li>
+<li><a href="/scanners" tabindex="3">Scanners</a></li>
+<li><a href="http://github.com/danieljampen/multiav" tabindex="4">Project page</a></li>
+<li><a href="/about" tabindex="5">About</a></li>
+</ul>
+</div>
+<div id="content">
+<table border="0" style="width:700px">
+<tr><td>
+<h2>Upload</h2>
+<p>Please, select the file to upload and scan with multiple antivirus solutions.</p>
+<form method="POST" enctype="multipart/form-data" action="/upload" class="dropzone" id="my-awesome-dropzone">
+    <div class="fallback">
+        <input type="file" name="file_upload" />
+        <br/>
+        <input type="submit" value="Scan!"/>
+    </div>
+</form>
+<div class="table table-striped" class="files" id="previews">
+    <div id="template" class="file-row">
+        <!-- This is used as the file preview template -->
+        <div class="file-cell">
+            <p class="name" data-dz-name></p>
+            <strong class="error" data-dz-errormessage></strong>
+        </div>
+        <div class="file-cell">
+            <p class="size" data-dz-size></p>
+        </div>
+        <div class="file-cell">
+            <p class="status">queued</p>
+        </div>
+        <div>
+            <a class="cancel" data-dz-remove title="remove">X</a>
+        </div>
+    </div>
+</div>
+<button id="act-on-upload" style="display:none">Scan!</button>
+</td></tr>
+</table>
+</div>
+<div align="center" id="footer">
+    <h2>Copyright (c) 2014, 2015 Joxean Koret, 2019 Daniel Jampen</h2>
+</div>
+<script>
+    fileHashes = new Array();
+
+    var previewNode = document.querySelector("#template");
+    previewNode.id = "";
+    var previewTemplate = previewNode.parentNode.innerHTML;
+    previewNode.parentNode.removeChild(previewNode);
+
+
+    Dropzone.options.myAwesomeDropzone = { 
+        url: "/api/upload",
+        maxFilesize: null,
+        paramName: "file_upload",
+        autoProcessQueue: false,
+        autoQueue: false,
+        previewTemplate: previewTemplate,
+        init: function() {
+            var submitButton = document.querySelector("#act-on-upload");
+            myDropzone = this;
+            submitButton.addEventListener("click", function() {
+                addedFiles = myDropzone.getFilesWithStatus(Dropzone.ADDED)
+
+                if(addedFiles.length == 0)
+                    return;
+
+                for(file in addedFiles){
+                    myDropzone.enqueueFile(addedFiles[file]);
+                }
+                myDropzone.processQueue();
+                submitButton.innerHTML = "Processing queue...";
+                submitButton.disabled = true;
+            });
+            submitButton.style.display = 'block';
+        },
+        drop: function(file){
+            var submitButton = document.querySelector("#act-on-upload");
+            if(submitButton.disabled) {
+                submitButton.disabled = false;
+                submitButton.innerHTML = "Scan!";
+            }
+        },
+        thumbnail: function(file){
+            file.previewElement.querySelector(".cancel").onclick = function() {
+                myDropzone.removeFile(file);
+            };
+        },
+        uploadprogress: function (file, progress) {
+            if(progress == 100) {
+                file.previewElement.querySelector(".status").innerHTML = "scanning...";
+            } else {
+                file.previewElement.querySelector(".status").innerHTML = "uploading (" + Math.round(progress) + "%)";
+            }
+        },
+        success: function(file, response) {
+            response_object = JSON.parse(response);
+            fileHashes.push(response_object["hashes"]["sha256"]);
+            file.previewElement.querySelector(".status").innerHTML = "scan completed";
+        },
+        errror: function(file, response) {
+            file.previewElement.querySelector(".status").innerHTML = "scan failed";
+        },
+        complete: function() {
+            myDropzone = this;
+            if(myDropzone.getFilesWithStatus(Dropzone.QUEUED).length != 0){
+                myDropzone.processQueue(); 
+            }
+            else if(myDropzone.getFilesWithStatus(Dropzone.ADDED).length == 0 && myDropzone.getFilesWithStatus(Dropzone.UPLOADING).length == 0 ){
+                window.location.href = "/search?q=" + fileHashes.join(",");
+            }
+        }
+    };
+</script>
+</body>
+</html>
