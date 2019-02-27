@@ -1,4 +1,4 @@
-$def with (scanners, cpu_count)
+$def with (scanners, cpu_count, AV_SPEED)
 <html>
 <head>
 <link href="/static/multiav.css" rel="stylesheet" type="text/css">
@@ -58,17 +58,17 @@ $def with (scanners, cpu_count)
             </div>
             <div id="scansettings" style="display:none">
                 <div class="toggle_checkbox">
-                    <input type="checkbox" name="allowLeak"><span> allow data leak to vendors</span>
+                    <input type="checkbox" name="allowLeak"><span> Allow data leak to vendors</span>
                 </div>
                 <div>
-                    <span>Min Scanner Speed</span>
+                    <span>Min scanner speed</span>
                     <select name="minspeed">
-                        <option value="3" selected>ALL</option>
-                        <option value="-1">ULTRA</option>
-                        <option value="0">FAST</option>
-                        <option value="1">MEDIUM</option>
-                        <option value="2">SLOW</option>
-                      </select>
+                        $for speed in AV_SPEED:
+                            $if speed.name == "ALL":
+                                <option value="$speed.value" selected>$speed.name.lower().capitalize()</option>
+                            $else:
+                                <option value="$speed.value">$speed.name.lower().capitalize()</option>
+                    </select>
                 </div>
             </div>
             <button id="act-on-upload" class="button" style="display:none">Scan!</button>
@@ -91,9 +91,9 @@ $def with (scanners, cpu_count)
             <tr>
                 <td>$scanner['name']</td>
                 <td>
-                    $plugin_type_to_string(scanner["plugin_type"])
+                    $plugin_type_to_string(scanner["plugin_type"]).capitalize()
                 </td>
-                <td>$scanner['speed']</td>
+                <td>$scanner['speed'].lower().capitalize()</td>
                 <td>$scanner['engine_version']</td>
                 <td>$scanner['signature_version']</td>
                 <td>

@@ -108,6 +108,7 @@ class EnumEncoder(json.JSONEncoder):
     return json.JSONEncoder.default(self, obj)
 
 class AV_SPEED(OrderedEnum):
+  __order__ = 'ALL ULTRA FAST MEDIUM SLOW'
   ALL = 3  # Run only when all engines must be executed
   SLOW = 2
   MEDIUM = 1

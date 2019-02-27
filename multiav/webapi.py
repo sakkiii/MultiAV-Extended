@@ -13,7 +13,6 @@ urls = (
     '/', 'index',
     '/upload', 'upload',
     '/api/upload', 'api_upload',
-    '/api/upload_fast', 'api_upload_fast',
     '/api/search', 'api_search',
     '/about', 'about',
     '/last', 'last',
@@ -474,7 +473,7 @@ class index:
     db_scanners = db_api.get_scanners().list()
 
     render = web.template.render(TEMPLATE_PATH, globals={"sorted": sorted, "plugin_type_to_string": plugin_type_to_string})
-    return render.index(db_scanners, cpu_count())
+    return render.index(db_scanners, cpu_count(), AV_SPEED)
 
 
 # -----------------------------------------------------------------------
