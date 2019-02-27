@@ -562,7 +562,7 @@ class CPEScanMalicePlugin(CMalicePlugin):
 class CFlossMalicePlugin(CMalicePlugin):
   def __init__(self, cfg_parser):
     CMalicePlugin.__init__(self, cfg_parser, "FlossMalice")
-    self.speed = AV_SPEED.FAST
+    self.speed = AV_SPEED.SLOW
     self.plugin_type = PLUGIN_TYPE.FILE_FORMATS
     self.container_name = "floss"
 
@@ -594,7 +594,7 @@ class CWindowsDefenderMalicePlugin(CMalicePlugin):
 class CSophosMalicePlugin(CMalicePlugin):
   def __init__(self, cfg_parser):
     CMalicePlugin.__init__(self, cfg_parser, "SophosMalice")
-    self.speed = AV_SPEED.FAST
+    self.speed = AV_SPEED.SLOW
     self.plugin_type = PLUGIN_TYPE.AV
     self.container_name = "sophos"
 
@@ -613,7 +613,7 @@ class CAvastMalicePlugin(CMalicePlugin):
 class CAvgMalicePlugin(CMalicePlugin):
   def __init__(self, cfg_parser):
     CMalicePlugin.__init__(self, cfg_parser, "AvgMalice")
-    self.speed = AV_SPEED.FAST
+    self.speed = AV_SPEED.ULTRA
     self.plugin_type = PLUGIN_TYPE.AV
     self.container_name = "avg"
 
@@ -621,7 +621,7 @@ class CAvgMalicePlugin(CMalicePlugin):
 class CBitDefenderMalicePlugin(CMalicePlugin):
   def __init__(self, cfg_parser):
     CMalicePlugin.__init__(self, cfg_parser, "BitDefenderMalice")
-    self.speed = AV_SPEED.FAST
+    self.speed = AV_SPEED.MEDIUM
     self.plugin_type = PLUGIN_TYPE.AV
     self.container_name = "bitdefender"
     self.container_build_params["BDKEY"] = cfg_parser.get(self.name, "LICENSE_KEY")
@@ -630,7 +630,7 @@ class CBitDefenderMalicePlugin(CMalicePlugin):
 class CClamAVMalicePlugin(CMalicePlugin):
   def __init__(self, cfg_parser):
     CMalicePlugin.__init__(self, cfg_parser, "ClamAVMalice")
-    self.speed = AV_SPEED.FAST
+    self.speed = AV_SPEED.ULTRA
     self.plugin_type = PLUGIN_TYPE.AV
     self.container_name = "clamav"
 
@@ -646,7 +646,7 @@ class CComodoMalicePlugin(CMalicePlugin):
 class CDrWebMalicePlugin(CMalicePlugin):
   def __init__(self, cfg_parser):
     CMalicePlugin.__init__(self, cfg_parser, "DrWebMalice")
-    self.speed = AV_SPEED.FAST
+    self.speed = AV_SPEED.SLOW
     self.plugin_type = PLUGIN_TYPE.AV
     self.container_name = "drweb"
 
@@ -670,7 +670,7 @@ class CFProtMalicePlugin(CMalicePlugin):
 class CFSecureMalicePlugin(CMalicePlugin):
   def __init__(self, cfg_parser):
     CMalicePlugin.__init__(self, cfg_parser, "FSecureMalice")
-    self.speed = AV_SPEED.FAST
+    self.speed = AV_SPEED.MEDIUM
     self.plugin_type = PLUGIN_TYPE.AV
     self.container_name = "fsecure"
 
@@ -694,7 +694,7 @@ class CMcAfeeMalicePlugin(CMalicePlugin):
 class CYaraMalicePlugin(CMalicePlugin):
   def __init__(self, cfg_parser):
     CMalicePlugin.__init__(self, cfg_parser, "YaraMalice")
-    self.speed = AV_SPEED.FAST
+    self.speed = AV_SPEED.MEDIUM
     self.plugin_type = PLUGIN_TYPE.METADATA
     self.container_name = "yara"
 
