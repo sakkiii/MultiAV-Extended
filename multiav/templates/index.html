@@ -63,11 +63,11 @@ $def with (scanners, cpu_count)
                 <div>
                     <span>Min Scanner Speed</span>
                     <select name="minspeed">
-                        <option value="all" selected>All</option>
-                        <option value="ultra">Ultra</option>
-                        <option value="fast">Fast</option>
-                        <option value="medium">Medium</option>
-                        <option value="slow">Slow</option>
+                        <option value="3" selected>ALL</option>
+                        <option value="-1">ULTRA</option>
+                        <option value="0">FAST</option>
+                        <option value="1">MEDIUM</option>
+                        <option value="2">SLOW</option>
                       </select>
                 </div>
             </div>
@@ -81,6 +81,7 @@ $def with (scanners, cpu_count)
         <tr>
             <th>Name</th>
             <th>Plugin type</th>
+            <th>Speed</th>
             <th>Engine version</th>
             <th>Signature version</th>
             <th>Internet access</th>
@@ -92,6 +93,7 @@ $def with (scanners, cpu_count)
                 <td>
                     $plugin_type_to_string(scanner["plugin_type"])
                 </td>
+                <td>$scanner['speed']</td>
                 <td>$scanner['engine_version']</td>
                 <td>$scanner['signature_version']</td>
                 <td>

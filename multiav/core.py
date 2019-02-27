@@ -399,7 +399,8 @@ class CMalicePlugin(CAvScanner):
           "infected": False,
           "engine": "-",
           "updated": "-",
-          "has_internet": self.container_requires_internet
+          "has_internet": self.container_requires_internet,
+          "speed": self.speed.name
         }
         print("[{0}] Exception in scan method".format(self.name))
         print(e)
@@ -1509,6 +1510,7 @@ class CMultiAV:
         
         result = av.results
         result["plugin_type"] = av.plugin_type
+        result["speed"] = av.speed.name
 
         if av.plugin_type == PLUGIN_TYPE.LEGACY:
           binary_version = av.get_binary_version()
@@ -1591,7 +1593,8 @@ class CMultiAV:
       'old_signature_version': old_signature_version,
       'signature_version': av.get_signature_version(),
       'plugin_type': av.plugin_type,
-      'has_internet': av.container_requires_internet
+      'has_internet': av.container_requires_internet,
+      'speed': av.speed.name
       }
 
     if q is not None:

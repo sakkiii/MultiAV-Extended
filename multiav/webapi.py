@@ -60,7 +60,8 @@ class CDbSamples:
                                                 plugin_type integer,
                                                 signature_version text,
                                                 engine_version text,
-                                                has_internet integer)""")
+                                                has_internet integer,
+                                                speed text)""")
       except:
         print("Error:", sys.exc_info())[1]
 
@@ -138,7 +139,7 @@ class CDbSamples:
     rows = self.db.select("scanners", where=where, vals={'name': name})
     return rows
 
-  def insert_scanner(self, name, plugin_type, has_internet, signature_version, engine_version):
+  def insert_scanner(self, name, plugin_type, has_internet, signature_version, engine_version, speed):
     if type(plugin_type) is PLUGIN_TYPE:
       plugin_type_value = plugin_type.value
     else:
@@ -146,11 +147,11 @@ class CDbSamples:
 
     has_internet = 1 if has_internet == True else 0
       
-    row = self.db.insert("scanners",name=name, plugin_type=plugin_type_value, has_internet=has_internet, \
+    row = self.db.insert("scanners",name=name, plugin_type=plugin_type_value, has_internet=has_internet, speed=speed, \
                           signature_version=str(signature_version), engine_version=str(engine_version))
     return row
     
-  def update_scanner(self, name, plugin_type, has_internet, signature_version, engine_version = None):
+  def update_scanner(self, name, plugin_type, has_internet, signature_version, engine_version = None, speed=None):
     if type(plugin_type) is PLUGIN_TYPE:
       plugin_type_value = plugin_type.value
     else:
@@ -170,7 +171,8 @@ class CDbSamples:
     
     # insert new scanner if none existed)
     if updated_rows == 0:
-      self.insert_scanner(name, plugin_type, has_internet, signature_version, engine_version if engine_version is not None else "-")
+      self.insert_scanner(name, plugin_type, has_internet, signature_version, \
+         engine_version if engine_version is not None else "-", speed if speed is not None else "-")
 
     return updated_rows
 
@@ -515,15 +517,7 @@ class api_upload:
     buf = i["file_upload"].value
     filename = i["file_upload"].filename
 
-    speeds = {
-      "all": AV_SPEED.ALL,
-      "ultra": AV_SPEED.ULTRA,
-      "fast": AV_SPEED.FAST,
-      "medium": AV_SPEED.MEDIUM,
-      "slow": AV_SPEED.SLOW
-    }
-
-    av_min_speed = speeds[i["minspeed"]]
+    av_min_speed = AV_SPEED(int(i["minspeed"]))
     av_allow_internet = i["allow_internet"] == "true"
 
     # Setup the report
@@ -562,57 +556,12 @@ class api_upload:
       engine_version = scan_results[scanner_name]["engine"] if "engine" in scan_results[scanner_name] else "-"
       plugin_type = scan_results[scanner_name]["plugin_type"]
       has_internet = scan_results[scanner_name]["has_internet"]
+      speed = scan_results[scanner_name]["speed"]
 
-      db_api.update_scanner(scanner_name, plugin_type, has_internet, signature_version, engine_version)
+      db_api.update_scanner(scanner_name, plugin_type, has_internet, signature_version, engine_version, speed)
 
     print("webapi: scanner db update complete")
     return json.dumps(report, cls=EnumEncoder)
-
-
-# -----------------------------------------------------------------------
-class api_upload_fast:
-  def POST(self):
-    i = web.input(file_upload={}, speed=AV_SPEED.ULTRA)
-    if i["file_upload"] is None or i["file_upload"] == "":
-      return "{'error':'No file uploaded or invalid file.'}"
-
-    speed = int(i["speed"])
-    buf = i["file_upload"].value
-    filename = i["file_upload"].filename
-
-    # Setup the report
-    report = {
-        "hashes": {
-          "md5": md5(buf).hexdigest(),
-          "sha1": sha1(buf).hexdigest(),
-          "sha256": sha256(buf).hexdigest()
-        },
-        "file": {
-          "name": filename,
-          "size": len(buf),
-        }
-    }
-
-    # Scan the file
-    av = CMultiAV()
-    scan_results = av.scan_buffer(buf, speed)
-    report.update(scan_results)
-
-    # Persist results to db
-    db_api = CDbSamples()
-    report["id"] = db_api.insert_sample_report(filename, buf, scan_results)
-
-    # Update scanner db
-    for scanner_name in scan_results:
-      signature_version = scan_results[scanner_name]["updated"] if "updated" in scan_results[scanner_name] else "-"
-      engine_version = scan_results[scanner_name]["engine"] if "engine" in scan_results[scanner_name] else "-"
-      plugin_type = scan_results[scanner_name]["plugin_type"]
-      has_internet = scan_results[scanner_name]["has_inernet"]
-
-      db_api.update_scanner(scanner_name, plugin_type, has_internet, signature_version, engine_version)
-
-    return json.dumps(report, cls=EnumEncoder)
-
 
 # -----------------------------------------------------------------------
 class upload:
@@ -653,8 +602,9 @@ class upload:
       engine_version = scan_results[scanner_name]["engine"] if "engine" in scan_results[scanner_name] else "-"
       plugin_type = scan_results[scanner_name]["plugin_type"]
       has_internet = scan_results[scanner_name]["has_inernet"]
+      speed = scan_results[scanner_name]["speed"]
 
-      db_api.update_scanner(scanner_name, plugin_type, has_internet, signature_version, engine_version)
+      db_api.update_scanner(scanner_name, plugin_type, has_internet, signature_version, engine_version, speed)
 
     # And show the results
     return render.results(report_id, scan_results, hashes, file_properties)
@@ -675,8 +625,9 @@ class update:
         plugin_type = update_results[scanner]["plugin_type"]
         has_internet = update_results[scanner]["has_inernet"]
         signature_version = update_results[scanner]["signature_version"]
+        speed = update_results[scanner]["speed"]
 
-        db_api.update_scanner(scanner, plugin_type, has_internet, signature_version)
+        db_api.update_scanner(scanner, plugin_type, has_internet, signature_version, speed)
 
     # Show the results
     render = web.template.render(TEMPLATE_PATH, globals={"sorted": sorted, "plugin_type_to_string": plugin_type_to_string})
