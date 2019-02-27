@@ -116,7 +116,7 @@ class AV_SPEED(OrderedEnum):
   ULTRA = -1
 
 class PLUGIN_TYPE(OrderedEnum):
-  LEGACY = 0
+  #LEGACY = 0
   AV = 1
   METADATA = 2
   INTEL = 3
@@ -125,107 +125,40 @@ class PLUGIN_TYPE(OrderedEnum):
 DOCKER_NETWORK_NO_INTERNET_NAME = "multiav-no-internet-bridge"
 DOCKER_NETWORK_INTERNET_NAME = "multiav-internet-bridge"
 
-# -----------------------------------------------------------------------
-class CAvScanner:
-  def __init__(self, cfg_parser):
-    self.cfg_parser = cfg_parser
-    self.name = None
-    self.speed = AV_SPEED.SLOW
-    self.results = {}
-    self.file_index = 0
-    self.malware_index = 1
-    self.scan_output_pattern = None
-    self.binary_version_pattern = None
-    self.engine_data_version_pattern = None
-    self.update_check_pattern = None
-    self.plugin_type = PLUGIN_TYPE.LEGACY
-
-  def build_cmd(self, path):
-    parser = self.cfg_parser
-    scan_path = parser.get(self.name, "PATH")
-    scan_args = parser.get(self.name, "ARGUMENTS")
-    args = [scan_path]
-    args.extend(scan_args.split(" "))
-    args.append(path)
-    return args
-
-  def scan(self, path):
-    if self.scan_output_pattern is None:
-      Exception("Not implemented")
-
-    try:
-      cmd = self.build_cmd(path)
-    except: # There is no entry in the *.cfg file for this AV engine?
-      pass
-
-    try:
-      output = check_output(cmd)
-    except CalledProcessError as e:
-      output = e.output
-
-    scan_output_pattern = self.scan_output_pattern
-    matches = re.findall(scan_output_pattern, output, re.IGNORECASE|re.MULTILINE)
-    for match in matches:
-      self.results[match[self.file_index]] = match[self.malware_index]
-    return len(self.results) > 0
-
-  def is_disabled(self):
-    parser = self.cfg_parser
-    try:
-      self.cfg_parser.get(self.name, "DISABLED")
-      return True
-    except:
-      return False
-  
-  def update(self):
-    try:
-      cmd = self.cfg_parser.get(self.name, "UPDATE").split(' ')
-    except ConfigParser.NoOptionError:
-      print("Update not supported by scanner: {0}".format(self.name))
-      return False
-    try:
-      output = check_output(cmd)
-    except CalledProcessError as e:
-      output = e.output
-    except:
-      return False
-
-    print("Output update: {0}".format(output))
-
-    return True
-
-  def get_signature_version(self):
-    return "-"
-
 #-----------------------------------------------------------------------
-class CMalicePlugin(CAvScanner):
+class CDockerAvScanner():
   def __init__(self, cfg_parser, name):
-    CAvScanner.__init__(self, cfg_parser)
+    self.cfg_parser = cfg_parser
     self.name = name
+    self.speed = AV_SPEED.SLOW
+    self.plugin_type = None
+    self.results = {}
     self.container_name = None
     self.plugin_id = cfg_parser.get(self.name, "PLUGIN_ID")
     self.docker_network_no_internet = self.cfg_parser.get("MULTIAV", "DOCKER_NETWORK_NO_INTERNET").split(".") #[10,192,212,0]
     self.docker_network_internet = self.cfg_parser.get("MULTIAV", "DOCKER_NETWORK_INTERNET").split(".") #[10,168,137,0]
     self.container_api_endpoint = "scan"
     self.container_api_sample_parameter_name = "malware"
-
-    if self.cfg_parser.has_option(self.name, "ENABLE_INTERNET_ACCESS"):
-      self.container_requires_internet = int(self.cfg_parser.get(self.name, "ENABLE_INTERNET_ACCESS")) == 1
-    else:
-      self.container_requires_internet = False
-
+    self.container_requires_internet = int(self.get_config_value(self.name, "ENABLE_INTERNET_ACCESS", 0)) == 1
     self.container_api_host = self.get_api_host()
     self.container_api_port = 3993
-
+    self.container_build_url_override = self.get_config_value(self.name, "DOCKER_BUILD_URL_OVERRIDE", None)
     self.container_run_command_arguments = dict()
     self.container_run_docker_parameters = dict()
     self.container_build_params = dict()
-
-    if self.cfg_parser.has_option(self.name, "DOCKER_BUILD_URL_OVERRIDE"):
-      self.container_build_url_override = self.cfg_parser.get(self.name, "DOCKER_BUILD_URL_OVERRIDE")
-    else:
-      self.container_build_url_override = None
   
+  def get_config_value(self, name, variable, default):
+    if self.cfg_parser.has_option(name, variable):
+      return self.cfg_parser.get(self.name, variable)
+    return default
+
+  def is_disabled(self):
+    try:
+      self.cfg_parser.get(self.name, "DISABLED")
+      return True
+    except:
+      return False
+
   def get_api_host(self):
     ip = []
     if self.container_requires_internet:
@@ -493,9 +426,9 @@ class CMalicePlugin(CAvScanner):
     return output
 
 #-----------------------------------------------------------------------
-class CMaliceHashPlugin(CMalicePlugin):
+class CDockerHashLookupService(CDockerAvScanner):
   def __init__(self, cfg_parser, name):
-    CMalicePlugin.__init__(self, cfg_parser, name)
+    CDockerAvScanner.__init__(self, cfg_parser, name)
   
   def scan(self, path):
     retry = 0
@@ -537,9 +470,9 @@ class CMaliceHashPlugin(CMalicePlugin):
     return False
 
 #-----------------------------------------------------------------------
-class CFileInfo(CMalicePlugin):
+class CFileInfo(CDockerAvScanner):
   def __init__(self, cfg_parser):
-    CMalicePlugin.__init__(self, cfg_parser, "FileInfoMalice")
+    CDockerAvScanner.__init__(self, cfg_parser, "FileInfoMalice")
     self.speed = AV_SPEED.ULTRA
     self.plugin_type = PLUGIN_TYPE.METADATA
     self.container_name = "fileinfo"
@@ -548,9 +481,9 @@ class CFileInfo(CMalicePlugin):
     return "not supported"
 
 #-----------------------------------------------------------------------
-class CPEScanMalicePlugin(CMalicePlugin):
+class CPEScanMalicePlugin(CDockerAvScanner):
   def __init__(self, cfg_parser):
-    CMalicePlugin.__init__(self, cfg_parser, "PEScanMalice")
+    CDockerAvScanner.__init__(self, cfg_parser, "PEScanMalice")
     self.speed = AV_SPEED.FAST
     self.plugin_type = PLUGIN_TYPE.FILE_FORMATS
     self.container_name = "pescan"
@@ -559,9 +492,9 @@ class CPEScanMalicePlugin(CMalicePlugin):
     return "not supported"
 
 #-----------------------------------------------------------------------
-class CFlossMalicePlugin(CMalicePlugin):
+class CFlossMalicePlugin(CDockerAvScanner):
   def __init__(self, cfg_parser):
-    CMalicePlugin.__init__(self, cfg_parser, "FlossMalice")
+    CDockerAvScanner.__init__(self, cfg_parser, "FlossMalice")
     self.speed = AV_SPEED.SLOW
     self.plugin_type = PLUGIN_TYPE.FILE_FORMATS
     self.container_name = "floss"
@@ -571,9 +504,9 @@ class CFlossMalicePlugin(CMalicePlugin):
 
 #-----------------------------------------------------------------------
 # Update and download servers not reachable anymore :/
-'''class CZonerMalicePlugin(CMalicePlugin):
+'''class CZonerMalicePlugin(CDockerAvScanner):
   def __init__(self, cfg_parser):
-    CMalicePlugin.__init__(self, cfg_parser, "ZonerMalice")
+    CDockerAvScanner.__init__(self, cfg_parser, "ZonerMalice")
     self.speed = AV_SPEED.FAST
     self.plugin_type = PLUGIN_TYPE.AV
     self.container_name = "zoner"
@@ -582,26 +515,26 @@ class CFlossMalicePlugin(CMalicePlugin):
     self.container_enviroment_variables["ZONE_KEY"] = cfg_parser.get(self.name, "LICENSE_KEY")'''
 
 #-----------------------------------------------------------------------
-class CWindowsDefenderMalicePlugin(CMalicePlugin):
+class CWindowsDefenderMalicePlugin(CDockerAvScanner):
   def __init__(self, cfg_parser):
-    CMalicePlugin.__init__(self, cfg_parser, "WindowsDefenderMalice")
+    CDockerAvScanner.__init__(self, cfg_parser, "WindowsDefenderMalice")
     self.speed = AV_SPEED.FAST
     self.plugin_type = PLUGIN_TYPE.AV
     self.container_name = "windows-defender"
     self.container_run_docker_parameters["--security-opt"] = "seccomp=seccomp.json"
 
 #-----------------------------------------------------------------------
-class CSophosMalicePlugin(CMalicePlugin):
+class CSophosMalicePlugin(CDockerAvScanner):
   def __init__(self, cfg_parser):
-    CMalicePlugin.__init__(self, cfg_parser, "SophosMalice")
+    CDockerAvScanner.__init__(self, cfg_parser, "SophosMalice")
     self.speed = AV_SPEED.SLOW
     self.plugin_type = PLUGIN_TYPE.AV
     self.container_name = "sophos"
 
 #-----------------------------------------------------------------------
-class CAvastMalicePlugin(CMalicePlugin):
+class CAvastMalicePlugin(CDockerAvScanner):
   def __init__(self, cfg_parser):
-    CMalicePlugin.__init__(self, cfg_parser, "AvastMalice")
+    CDockerAvScanner.__init__(self, cfg_parser, "AvastMalice")
     self.speed = AV_SPEED.FAST
     self.plugin_type = PLUGIN_TYPE.AV
     self.container_name = "avast"
@@ -610,90 +543,90 @@ class CAvastMalicePlugin(CMalicePlugin):
     return "skipped"
 
 #-----------------------------------------------------------------------
-class CAvgMalicePlugin(CMalicePlugin):
+class CAvgMalicePlugin(CDockerAvScanner):
   def __init__(self, cfg_parser):
-    CMalicePlugin.__init__(self, cfg_parser, "AvgMalice")
+    CDockerAvScanner.__init__(self, cfg_parser, "AvgMalice")
     self.speed = AV_SPEED.ULTRA
     self.plugin_type = PLUGIN_TYPE.AV
     self.container_name = "avg"
 
 #-----------------------------------------------------------------------
-class CBitDefenderMalicePlugin(CMalicePlugin):
+class CBitDefenderMalicePlugin(CDockerAvScanner):
   def __init__(self, cfg_parser):
-    CMalicePlugin.__init__(self, cfg_parser, "BitDefenderMalice")
+    CDockerAvScanner.__init__(self, cfg_parser, "BitDefenderMalice")
     self.speed = AV_SPEED.MEDIUM
     self.plugin_type = PLUGIN_TYPE.AV
     self.container_name = "bitdefender"
     self.container_build_params["BDKEY"] = cfg_parser.get(self.name, "LICENSE_KEY")
 
 #-----------------------------------------------------------------------
-class CClamAVMalicePlugin(CMalicePlugin):
+class CClamAVMalicePlugin(CDockerAvScanner):
   def __init__(self, cfg_parser):
-    CMalicePlugin.__init__(self, cfg_parser, "ClamAVMalice")
+    CDockerAvScanner.__init__(self, cfg_parser, "ClamAVMalice")
     self.speed = AV_SPEED.ULTRA
     self.plugin_type = PLUGIN_TYPE.AV
     self.container_name = "clamav"
 
 #-----------------------------------------------------------------------
-class CComodoMalicePlugin(CMalicePlugin):
+class CComodoMalicePlugin(CDockerAvScanner):
   def __init__(self, cfg_parser):
-    CMalicePlugin.__init__(self, cfg_parser, "ComodoMalice")
+    CDockerAvScanner.__init__(self, cfg_parser, "ComodoMalice")
     self.speed = AV_SPEED.FAST
     self.plugin_type = PLUGIN_TYPE.AV
     self.container_name = "comodo"
 
 #-----------------------------------------------------------------------
-class CDrWebMalicePlugin(CMalicePlugin):
+class CDrWebMalicePlugin(CDockerAvScanner):
   def __init__(self, cfg_parser):
-    CMalicePlugin.__init__(self, cfg_parser, "DrWebMalice")
+    CDockerAvScanner.__init__(self, cfg_parser, "DrWebMalice")
     self.speed = AV_SPEED.SLOW
     self.plugin_type = PLUGIN_TYPE.AV
     self.container_name = "drweb"
 
 #-----------------------------------------------------------------------
-class CEScanMalicePlugin(CMalicePlugin):
+class CEScanMalicePlugin(CDockerAvScanner):
   def __init__(self, cfg_parser):
-    CMalicePlugin.__init__(self, cfg_parser, "EScanMalice")
+    CDockerAvScanner.__init__(self, cfg_parser, "EScanMalice")
     self.speed = AV_SPEED.FAST
     self.plugin_type = PLUGIN_TYPE.AV
     self.container_name = "escan"
 
 #-----------------------------------------------------------------------
-class CFProtMalicePlugin(CMalicePlugin):
+class CFProtMalicePlugin(CDockerAvScanner):
   def __init__(self, cfg_parser):
-    CMalicePlugin.__init__(self, cfg_parser, "FProtMalice")
+    CDockerAvScanner.__init__(self, cfg_parser, "FProtMalice")
     self.speed = AV_SPEED.FAST
     self.plugin_type = PLUGIN_TYPE.AV
     self.container_name = "fprot"
 
 #-----------------------------------------------------------------------
-class CFSecureMalicePlugin(CMalicePlugin):
+class CFSecureMalicePlugin(CDockerAvScanner):
   def __init__(self, cfg_parser):
-    CMalicePlugin.__init__(self, cfg_parser, "FSecureMalice")
+    CDockerAvScanner.__init__(self, cfg_parser, "FSecureMalice")
     self.speed = AV_SPEED.MEDIUM
     self.plugin_type = PLUGIN_TYPE.AV
     self.container_name = "fsecure"
 
 #-----------------------------------------------------------------------
-class CKasperskyMalicePlugin(CMalicePlugin):
+class CKasperskyMalicePlugin(CDockerAvScanner):
   def __init__(self, cfg_parser):
-    CMalicePlugin.__init__(self, cfg_parser, "KasperskyMalice")
+    CDockerAvScanner.__init__(self, cfg_parser, "KasperskyMalice")
     self.speed = AV_SPEED.FAST
     self.plugin_type = PLUGIN_TYPE.AV
     self.container_name = "kaspersky"
 
 #-----------------------------------------------------------------------
-class CMcAfeeMalicePlugin(CMalicePlugin):
+class CMcAfeeMalicePlugin(CDockerAvScanner):
   def __init__(self, cfg_parser):
-    CMalicePlugin.__init__(self, cfg_parser, "McAfeeMalice")
+    CDockerAvScanner.__init__(self, cfg_parser, "McAfeeMalice")
     self.speed = AV_SPEED.FAST
     self.plugin_type = PLUGIN_TYPE.AV
     self.container_name = "mcafee"
 
 #-----------------------------------------------------------------------
-class CYaraMalicePlugin(CMalicePlugin):
+class CYaraMalicePlugin(CDockerAvScanner):
   def __init__(self, cfg_parser):
-    CMalicePlugin.__init__(self, cfg_parser, "YaraMalice")
+    CDockerAvScanner.__init__(self, cfg_parser, "YaraMalice")
     self.speed = AV_SPEED.MEDIUM
     self.plugin_type = PLUGIN_TYPE.METADATA
     self.container_name = "yara"
@@ -702,9 +635,9 @@ class CYaraMalicePlugin(CMalicePlugin):
     return "not supported"
 
 #-----------------------------------------------------------------------
-class CShadowServerMalicePlugin(CMaliceHashPlugin):
+class CShadowServerMalicePlugin(CDockerHashLookupService):
   def __init__(self, cfg_parser):
-    CMaliceHashPlugin.__init__(self, cfg_parser, "ShadowServerMalice")
+    CDockerHashLookupService.__init__(self, cfg_parser, "ShadowServerMalice")
     self.speed = AV_SPEED.FAST
     self.plugin_type = PLUGIN_TYPE.INTEL
     self.container_name = "shadow-server"
@@ -714,9 +647,9 @@ class CShadowServerMalicePlugin(CMaliceHashPlugin):
     return "not supported"
 
 #-----------------------------------------------------------------------
-class CVirusTotalMalicePlugin(CMaliceHashPlugin):
+class CVirusTotalMalicePlugin(CDockerHashLookupService):
   def __init__(self, cfg_parser):
-    CMaliceHashPlugin.__init__(self, cfg_parser, "VirusTotalMalice")
+    CDockerHashLookupService.__init__(self, cfg_parser, "VirusTotalMalice")
     self.speed = AV_SPEED.FAST
     self.plugin_type = PLUGIN_TYPE.INTEL
     self.container_name = "virustotal"
@@ -727,9 +660,9 @@ class CVirusTotalMalicePlugin(CMaliceHashPlugin):
     return "not supported"
 
 #-----------------------------------------------------------------------
-class CNationalSoftwareReferenceLibraryMalicePlugin(CMaliceHashPlugin):
+class CNationalSoftwareReferenceLibraryMalicePlugin(CDockerHashLookupService):
   def __init__(self, cfg_parser):
-    CMaliceHashPlugin.__init__(self, cfg_parser, "NationalSoftwareReferenceLibraryMalice")
+    CDockerHashLookupService.__init__(self, cfg_parser, "NationalSoftwareReferenceLibraryMalice")
     self.speed = AV_SPEED.FAST
     self.plugin_type = PLUGIN_TYPE.INTEL
     self.container_name = "nsrl"
@@ -739,636 +672,20 @@ class CNationalSoftwareReferenceLibraryMalicePlugin(CMaliceHashPlugin):
     return "not supported"
 
 #-----------------------------------------------------------------------
-class CTrendmicroScanner(CAvScanner):
-  def __init__(self, cfg_parser):
-    CAvScanner.__init__(self, cfg_parser)
-    self.name = "Trendmicro"
-    #It seems as fast as kaspersky even faster
-    self.speed = AV_SPEED.FAST
-    self.scan_output_pattern1 = "\\nfilename=(.*)"
-    self.scan_output_pattern2 = "\\nvirus_name=(.*)"
-
-  def scan(self, path):
-    if self.scan_output_pattern is None:
-      Exception("Not implemented")
-
-    try:
-      cmd = self.build_cmd(path)
-    except:
-      pass
-    
-    logdir = '/var/log/TrendMicro/SProtectLinux'
-    logfile = logdir+'/Virus.' + time.strftime('%Y%m%d') + '.0001'
-    call(cmd)
-
-    with open(logfile, 'r') as log:
-      output = log.read()
-    reset = open(logfile, 'wb') #Clear the log file
-    reset.close()
-
-    matches1 = re.findall(self.scan_output_pattern1, output, re.IGNORECASE|re.MULTILINE)
-    matches2 = re.findall(self.scan_output_pattern2, output, re.IGNORECASE|re.MULTILINE)
-    for i in range(len(matches1)):
-      self.results[matches1[i].split(' (')[0]] = matches2[i]
-
-    return len(self.results) > 0
-#-----------------------------------------------------------------------
-
-class CComodoScanner(CAvScanner):
-  def __init__(self, cfg_parser):
-    CAvScanner.__init__(self, cfg_parser)
-    self.name = "Comodo"
-    self.speed = AV_SPEED.FAST
-    self.scan_output_pattern = "(.*) ---\> Found .*, Malware Name is (.*)"
-    self.binary_version_pattern = ".*"
-
-  def build_cmd(self, path):
-    parser = self.cfg_parser
-    scan_path = parser.get(self.name, "PATH")
-    scan_args = parser.get(self.name, "ARGUMENTS")
-    args = [scan_path]
-    args.extend(scan_args.replace("$FILE", path).split(" "))
-    return args
-
-  def get_binary_version(self):
-    try:
-      version_file = self.cfg_parser.get(self.name, "BINARY_VERSION")
-    except ConfigParser.NoOptionError:
-      return "-"
-
-    e = xml.etree.ElementTree.parse(version_file).getroot()
-    #<COMODO><AntivirusPro><Configurations><A0><ProductVersion>
-    return e[1][4][7][1].text
-
-  def get_engine_data_version(self):
-    try:
-      version_file = self.cfg_parser.get(self.name, "ENGINE_DATA_VERSION")
-    except ConfigParser.NoOptionError:
-      return "-"
-
-    update_time = datetime.fromtimestamp(os.path.getmtime(version_file))
-    e = xml.etree.ElementTree.parse(version_file).getroot()
-    #<COMODO><AntivirusPro><Configurations><A0><Version>
-    return e[1][4][7][3].text + " " + str(update_time)
-
-#-----------------------------------------------------------------------
-class CCyrenScanner(CAvScanner):
-  def __init__(self, cfg_parser):
-    CAvScanner.__init__(self, cfg_parser)
-    self.name = "Cyren"
-    self.speed = AV_SPEED.ULTRA
-    self.scan_output_pattern = "Found:(.*)[\s]{3,}(.*)"
-
-  def scan(self, path):
-    if self.scan_output_pattern is None:
-        Exception("Not implemented")
-
-    try:
-        cmd = self.build_cmd(path)
-    except: # There is no entry in the *.cfg file for this AV engine?
-        pass
-
-    try:
-        output = check_output(cmd)
-    except CalledProcessError as e:
-        output = e.output
-
-    matches = re.findall(self.scan_output_pattern, output, re.IGNORECASE|re.MULTILINE)
-    for match in matches:
-      self.results[match[self.file_index].strip()] = match[self.malware_index]
-    return len(self.results) > 0
-
-#-----------------------------------------------------------------------
-class CKasperskyScanner(CAvScanner):
-  def __init__(self, cfg_parser):
-    CAvScanner.__init__(self, cfg_parser)
-    self.name = "Kaspersky"
-    # Considered fast because it requires the daemon to be running.
-    # This is why...
-    self.speed = AV_SPEED.FAST
-    self.scan_output_pattern = r"\d+-\d+-\d+ \d+:\d+:\d+\W(.*)\Wdetected\W(.*)"
-    self.scan_output_pattern2 = '(.*)(INFECTED|SUSPICION UDS:|SUSPICION HEUR:|WARNING HEUR:)(.*)'    
-
-  def build_cmd(self, path):
-    parser = self.cfg_parser
-    scan_path = parser.get(self.name, "PATH")
-    scan_args = parser.get(self.name, "ARGUMENTS")
-    args = [scan_path]
-    ver = os.path.basename(scan_path)
-    if ver == "kavscanner":
-        args.extend(scan_args.split(" "))
-        args.append(path)      
-    elif ver == "kav":
-        args.extend(scan_args.replace("$FILE", path).split(" "))
-    return args
-
-  def scan(self, path):
-    if self.scan_output_pattern is None:
-        Exception("Not implemented")
-
-    try:
-        cmd = self.build_cmd(path)
-    except: # There is no entry in the *.cfg file for this AV engine?
-        pass
-
-    try: # stderr=devnull because kavscanner writes socket info
-        with open(os.devnull, "w") as devnull:      
-            output = check_output(cmd, stderr=devnull)
-
-    except CalledProcessError as e:
-        output = e.output
-    ver = os.path.basename(cmd.pop(0))
-    if ver == "kavscanner":
-        self.file_index = 0
-        self.malware_index = 2
-        matches = re.findall(self.scan_output_pattern2, output, re.IGNORECASE|re.MULTILINE)
-        for match in matches:
-          self.results[match[self.file_index].split('\x08')[0].rstrip()] =\
-              match[self.malware_index].lstrip().rstrip()
-    elif ver == "kav":
-        matches = re.findall(self.scan_output_pattern, output, re.IGNORECASE|re.MULTILINE)
-        for match in matches:
-          self.results[match[self.file_index]] = match[self.malware_index]
-
-    return len(self.results) > 0
-
-#-----------------------------------------------------------------------
-class CClamScanner(CAvScanner):
-  def __init__(self, cfg_parser):
-    CAvScanner.__init__(self, cfg_parser)
-    self.name = "ClamAV"
-    self.speed = AV_SPEED.ULTRA
-    self.binary_version_pattern = "\d\.\d*.\d*"
-    self.engine_data_version_pattern = "[^\/]*\/\w{3}\s.*"
-
-  def scan_one(self, path):
-    try:
-      tmp = pyclamd.scan_file(path)
-      # fix output form e.g {u'/tmp/tmpbspbPz': ('FOUND', 'Eicar-Test-Signature')}
-      tmp[path] = tmp[path][1]
-      if tmp: self.results.update(tmp)
-    except:
-      pass
-
-  def scan_dir(self, path):
-    for root, dirs, files in os.walk(path, topdown=False):
-      for name in files:
-        self.scan_one(os.path.join(root, name))
-    return len(self.results)
-
-  def scan(self, path):
-    parser = self.cfg_parser
-    ep = parser.get(self.name, "UNIX_SOCKET")
-
-    clamav_running = False
-    retry_counter = 0
-    while retry_counter < 5 and not clamav_running:
-      try:
-        pyclamd.init_unix_socket(filename=ep)
-        clamav_running = True
-      except pyclamd.ConnectionError as e:
-        # clamav-daemon is down
-        parser = self.cfg_parser
-        try:
-          cmd = parser.get(self.name, "RESTART_CMD")
-          cmd = cmd.split(" ")
-          ouptut = check_output(cmd)
-          time.sleep(15)
-          print("clamav-daemon restarted. Try {0}. Output {1}".format(retry_counter, ouptut))
-          retry_counter += 1
-        except ConfigParser.NoOptionError:
-          print("clamav-daemon is down and no restart command is configured")
-          return False
-        except Exception as e:
-          print("could not restart clamav-daemon. Error {0}".format(e))
-          return False
-    
-    if os.path.isdir(path):
-      self.scan_dir(path)
-    else:
-      self.scan_one(path)
-    return len(self.results) == 0
-
-  def get_binary_version(self):
-    parser = self.cfg_parser
-    ep = parser.get(self.name, "UNIX_SOCKET")
-    pyclamd.init_unix_socket(filename=ep)
-
-    output = pyclamd.version()
-
-    binary_version_pattern = self.binary_version_pattern
-    matches = re.findall(binary_version_pattern, output, re.IGNORECASE|re.MULTILINE)
-    if len(matches) > 0:
-      return " ".join(matches)
-
-    return "-"
-
-  def get_engine_data_version(self):
-    parser = self.cfg_parser
-    ep = parser.get(self.name, "UNIX_SOCKET")
-    pyclamd.init_unix_socket(filename=ep)
-
-    output = pyclamd.version()
-
-    engine_data_version_pattern = self.engine_data_version_pattern
-    matches = re.findall(engine_data_version_pattern, output, re.IGNORECASE|re.MULTILINE)
-    if len(matches) > 0:
-      return ' '.join(matches)
-
-    return "-"
-
-#-----------------------------------------------------------------------
-class CFProtScanner(CAvScanner):
-  def __init__(self, cfg_parser):
-    CAvScanner.__init__(self, cfg_parser)
-    self.name = "F-Prot"
-    self.speed = AV_SPEED.ULTRA
-    self.scan_output_pattern = "\<(.*)\>\s+(.*)"
-    self.file_index = 1
-    self.malware_index = 0
-    self.binary_version_pattern = "\d*\.\d*\.\d*\.\d*,.*"
-    self.engine_data_version_pattern = "(\d*\.\d*\.\d*\.\d{3}$|\d{5,}$)"
-
-#-----------------------------------------------------------------------
-class CAviraScanner(CAvScanner):
-  def __init__(self, cfg_parser):
-    CAvScanner.__init__(self, cfg_parser)
-    self.name = "Avira"
-    self.speed = AV_SPEED.SLOW
-    self.scan_output_pattern = "ALERT: \[(.*)\] (.*) \<\<\<"
-    self.file_index = 1
-    self.malware_index = 0
-
-  def scan(self, path):
-    os.putenv("LANG", "C")
-    return CAvScanner.scan(self, path)
-
-#-----------------------------------------------------------------------
-class CBitDefenderScanner(CAvScanner):
-  def __init__(self, cfg_parser):
-    CAvScanner.__init__(self, cfg_parser)
-    self.name = "BitDefender"
-    self.speed = AV_SPEED.SLOW
-    self.scan_output_pattern = "(.*) \s+infected:\s(.*)"
-    self.binary_version_pattern = "v\d.\d+ \w+-\w+"
-    self.engine_data_version_pattern = "(\w{3}\s\w{3}\s\d{2}\s\d{2}:\d{2}:\d{2}\s\d{4}|Signature.*)"
-
-  def scan(self, path):
-    os.putenv("LANG", "C")
-    return CAvScanner.scan(self, path)
-
-# -----------------------------------------------------------------------
-class CEsetScanner(CAvScanner):
-  def __init__(self, cfg_parser):
-    CAvScanner.__init__(self, cfg_parser)
-    self.name = "ESET"
-    self.speed = AV_SPEED.MEDIUM
-
-  def scan(self, path):
-    os.putenv("LANG", "C")
-    cmd = self.build_cmd(path)
-    try:
-      output = check_output(cmd)
-    except CalledProcessError as e:
-      output = e.output
-
-    scan_output_pattern = 'name="(.*)", threat="(.*)",'
-    matches = re.findall(scan_output_pattern, output, re.IGNORECASE|re.MULTILINE)
-    for match in matches:
-      malware = match[1][:match[1].find('", ')]
-      if malware != "":
-        self.results[match[0]] = match[1][:match[1].find('", ')]
-    return len(self.results) > 0
-
-# -----------------------------------------------------------------------
-class CSophosScanner(CAvScanner):
-  def __init__(self, cfg_parser):
-    CAvScanner.__init__(self, cfg_parser)
-    self.name = "Sophos"
-    self.speed = AV_SPEED.MEDIUM
-    self.scan_output_pattern = "Virus '(.*)' found in file (.*)"
-    self.file_index = 1
-    self.malware_index = 0
-    self.binary_version_pattern = "Product.*"
-    self.engine_data_version_pattern1 = "Engine.*"
-    self.engine_data_version_pattern2 = "Virus data.*"
-    self.engine_data_version_pattern3 = "\d*\s\w*\s\d*,.*"
-
-  def scan(self, path):
-    os.putenv("LANG", "C")
-    return CAvScanner.scan(self, path)
-
-  def get_binary_version(self):
-    try:
-      cmd = self.cfg_parser.get(self.name, "BINARY_VERSION").split(' ')
-    except ConfigParser.NoOptionError:
-      return "-"
-
-    try:
-      output = check_output(cmd)
-    except CalledProcessError as e:
-      output = e.output
-
-    binary_version_pattern = self.binary_version_pattern
-    matches = re.findall(binary_version_pattern, output, re.IGNORECASE|re.MULTILINE)
-    if len(matches) > 0:
-      return matches[0].split(": ")[1]
-
-    return "-"
-
-  def get_engine_data_version(self):
-    try:
-      cmd = self.cfg_parser.get(self.name, "ENGINE_DATA_VERSION").split(' ')
-    except ConfigParser.NoOptionError:
-      return "-"
-
-    try:
-      output = check_output(cmd)
-    except CalledProcessError as e:
-      output = e.output
-
-    res = ["-"]
-    engine_data_version_pattern = self.engine_data_version_pattern1
-    matches = re.findall(engine_data_version_pattern, output, re.IGNORECASE|re.MULTILINE)
-    if len(matches) > 0:
-      res.append("Engine: " + matches[0].split(": ")[1])
-
-    engine_data_version_pattern = self.engine_data_version_pattern2
-    matches = re.findall(engine_data_version_pattern, output, re.IGNORECASE|re.MULTILINE)
-    if len(matches) > 0:
-      res.append("Virus data: " +matches[0].split(": ")[1])
-
-    engine_data_version_pattern = self.engine_data_version_pattern3
-    matches = re.findall(engine_data_version_pattern, output, re.IGNORECASE|re.MULTILINE)
-    if len(matches) > 0:
-      res.append("Updated: " + matches[-1])
-
-    if len(res) > 1:
-      res.pop(0)
-
-    return ' '.join(res)
-
-# -----------------------------------------------------------------------
-class CAvastScanner(CAvScanner):
-  def __init__(self, cfg_parser):
-    CAvScanner.__init__(self, cfg_parser)
-    self.name = "Avast"
-    self.speed = AV_SPEED.ULTRA
-    self.scan_output_pattern = "(.*)\t(.*)"
-
-  def scan(self, path):
-    os.putenv("LANG", "C")
-    return CAvScanner.scan(self, path)
-
-# -----------------------------------------------------------------------
-class CDrWebScanner(CAvScanner):
-  def __init__(self, cfg_parser):
-    CAvScanner.__init__(self, cfg_parser)
-    self.name = "DrWeb"
-    self.speed = AV_SPEED.SLOW
-    self.scan_output_pattern = "\>{0,1}(.*) infected with (.*)"
-
-#-----------------------------------------------------------------------
-class CEScanScanner(CAvScanner):
-  def __init__(self, cfg_parser):
-    CAvScanner.__init__(self, cfg_parser)
-    self.name = "MicroWorld-eScan"
-    self.speed = AV_SPEED.FAST
-    self.scan_output_pattern = '(.*)\[INFECTED\](.*)'
-
-  def scan(self, path):
-    if self.scan_output_pattern is None:
-      Exception("Not implemented")
-    
-    try:
-      cmd = self.build_cmd(path)
-    except: # There is no entry in the *.cfg file for this AV engine?
-      pass
-    
-    try:
-      output = check_output(cmd)
-    except CalledProcessError as e:
-      output = e.output
-    
-    matches = re.findall(self.scan_output_pattern, output, re.IGNORECASE | re.MULTILINE)
-    for match in matches:
-      self.results[match[self.file_index].rstrip()] = match[self.malware_index]
-    return len(self.results) > 0
-
-# -----------------------------------------------------------------------
-class CMcAfeeScanner(CAvScanner):
-  def __init__(self, cfg_parser):
-    CAvScanner.__init__(self, cfg_parser)
-    self.name = "McAfee"
-    self.speed = AV_SPEED.FAST
-    self.scan_output_pattern = "(.*) \.\.\. Found[:| the]{0,1} (.*) [a-z]+ [\!\!]{0,1}"
-    self.scan_output_pattern2 = "(.*) \.\.\. Found [a-z]+ or variant (.*) \!\!"
-
-  def scan(self, path):
-    os.putenv("LANG", "C")
-    ret = CAvScanner.scan(self, path)
-
-    try:
-      old_scan_output_pattern = self.scan_output_pattern
-      self.scan_output_pattern = self.scan_output_pattern2
-      ret |= CAvScanner.scan(self, path)
-    finally:
-      self.scan_output_pattern = old_scan_output_pattern
-
-    for match in self.results:
-      self.results[match] = self.results[match].strip("the ")
-
-    return ret
-
-# -----------------------------------------------------------------------
-class CAvgScanner(CAvScanner):
-  def __init__(self, cfg_parser):
-    CAvScanner.__init__(self, cfg_parser)
-    self.name = "AVG"
-    # Considered fast because it requires the daemon to be running.
-    # This is why...
-    self.speed = AV_SPEED.ULTRA
-    self.scan_output_pattern1 = "\>{0,1}(.*) \s+[a-z]+\s+[a-z]+\s+(.*)"
-    self.scan_output_pattern2 = "\>{0,1}(.*) \s+[a-z]+\s+(.*)" #like this:Luhe.Fiha.A
-
-  def scan(self, path):
-    cmd = self.build_cmd(path)
-    f = NamedTemporaryFile(delete=False)
-    f.close()
-    fname = f.name
-
-    try:
-      cmd.append("-r%s" % fname)
-      output = check_output(cmd)
-    except CalledProcessError as e:
-      output = e.output
-
-    output = open(fname, "rb").read()
-    os.unlink(fname)
-
-    matches1 = re.findall(self.scan_output_pattern1, output, re.IGNORECASE|re.MULTILINE)
-    matches2 = re.findall(self.scan_output_pattern2, output, re.IGNORECASE|re.MULTILINE)
-    matches = matches1 +matches2
-    for match in matches:
-      if match[1] not in ["file"]:
-        self.results[match[0].split(':/')[0]] = match[1]
-    return len(self.results) > 0
-
-# -----------------------------------------------------------------------
-class CIkarusScanner(CAvScanner):
-  def __init__(self, cfg_parser):
-    CAvScanner.__init__(self, cfg_parser)
-    self.name = "Ikarus"
-    self.speed = AV_SPEED.MEDIUM
-    # Horrible, isn't it?
-    self.scan_output_pattern = "(.*) - Signature \d+ '(.*)' found"
-
-  def scan(self, path):
-    cmd = self.build_cmd(path)
-    f = NamedTemporaryFile(delete=False)
-    f.close()
-    fname = f.name
-
-    try:
-      cmd.append("-logfile")
-      cmd.append(fname)
-      output = check_output(cmd)
-    except CalledProcessError as e:
-      output = e.output
-
-    output = codecs.open(fname, "r", "utf-16").read()
-    os.unlink(fname)
-
-    matches = re.findall(self.scan_output_pattern, output, re.IGNORECASE|re.MULTILINE)
-    for match in matches:
-      if match[1] not in ["file"]:
-        self.results[match[0]] = match[1]
-    return len(self.results) > 0
-
-# -----------------------------------------------------------------------
-class CFSecureScanner(CAvScanner):
-  def __init__(self, cfg_parser):
-    CAvScanner.__init__(self, cfg_parser)
-    self.name = "F-Secure"
-    self.speed = AV_SPEED.FAST
-    self.scan_output_pattern = "(.*): Infected: (.*) \[[a-z]+\]"
-# /home/r0x/Downloads/jigsaw: Infected: Trojan.AgentWDCR.GLX [Aquarius]
-
-# -----------------------------------------------------------------------
-class CWindowsDefScanner(CAvScanner):
-  def __init__(self, cfg_parser):
-    CAvScanner.__init__(self, cfg_parser)
-    self.name = "WindowsDefender"
-    self.speed = AV_SPEED.FAST
-    self.scan_output_pattern = ".* Scanning (.*?)\.{3}.*Threat (.*) identified."
-#EngineScanCallback(): Threat Ransom:MSIL/JigsawLocker.A identified
-    self.binary_version_pattern = "\d\.\d\.\d*\.\d"
-
-  def build_cmd(self, path):
-    parser = self.cfg_parser
-    scan_path = parser.get(self.name, "PATH")
-    scan_args = parser.get(self.name, "ARGUMENTS")
-    args = [scan_path]
-    args.extend(scan_args.replace("$FILE", path).split(" "))
-    return args
-
-  def scan(self, path):
-    if self.scan_output_pattern is None:
-      Exception("Not implemented")
-
-    try:
-      cmd = self.build_cmd(path)
-    except: # There is no entry in the *.cfg file for this AV engine?
-      pass
-
-    try:
-      if cmd:
-        output = check_output(cmd, stderr=STDOUT, cwd = os.path.dirname(cmd[0]))
-      else:
-        output = check_output(cmd, stderr=STDOUT)
-    except CalledProcessError as e:
-      output = e.output
-
-    scan_output_pattern = self.scan_output_pattern
-    matches = re.findall(scan_output_pattern, output, re.IGNORECASE|re.MULTILINE|re.DOTALL)
-    for match in matches:
-      if match[self.malware_index] == '':
-        self.results[match[self.file_index]] = 'Unknown:Win/NameUnknown'
-      else:
-        self.results[match[self.file_index]] = match[self.malware_index]
-    return len(self.results) > 0
-
-# -----------------------------------------------------------------------
-class CQuickHealScanner(CAvScanner):
-  def __init__(self, cfg_parser):
-    CAvScanner.__init__(self, cfg_parser)
-    self.cfg_parser = cfg_parser
-    self.name = 'QuickHeal'
-    self.speed = AV_SPEED.FAST
-    self.file_index = 1
-    self.malware_index = 2
-    self.scan_output_pattern = '(Scanning : |Archive  : )(.*)\nInfected[\s]+:[\s]+\((.*)\)'    
-
-  def build_cmd(self, path):
-    parser = self.cfg_parser
-    scan_path = parser.get(self.name, "PATH")
-    scan_args = parser.get(self.name, "ARGUMENTS")
-    args = [scan_path]
-    args.extend(scan_args.replace("$FILE", path).split(" "))
-    return args
-
-  def scan(self, path):
-    f = NamedTemporaryFile(delete=False)
-    f.close()
-    fname = f.name
-
-    if self.scan_output_pattern is None:
-      Exception("Not implemented")
-
-    try:
-      cmd = self.build_cmd(path)
-    
-    except: # There is no entry in the *.cfg file for this AV engine?
-      pass
-
-    try:
-      cmd.append("-REPORT=%s" % fname)
-      output = check_output(cmd)
-
-    except CalledProcessError as e:
-      output = e.output
-
-    output = open(fname, "rb").read()
-    os.unlink(fname)
-    matches = re.findall(self.scan_output_pattern, output, re.IGNORECASE|re.MULTILINE)
-    for match in matches:
-      self.results[match[self.file_index].rstrip('\r')] = match[self.malware_index]    
-
-    return len(self.results) > 0
-
-# -----------------------------------------------------------------------
-class CZavScanner(CAvScanner):
-  def __init__(self, cfg_parser):
-    CAvScanner.__init__(self, cfg_parser)
-    self.name = "ZAV"
-    self.speed = AV_SPEED.ULTRA
-    self.scan_output_pattern = "(.*): INFECTED \[(.*)\]"
-
 class PullPluginException(Exception):
   pass
 
+#-----------------------------------------------------------------------
 class StartPluginException(Exception):
   pass
 
+#-----------------------------------------------------------------------
 class CreateNetworkException(Exception):
   pass
 
 # -----------------------------------------------------------------------
 class CMultiAV:
-  def __init__(self, cfg = "config.cfg", auto_pull = False, start_containers = False):    
-    # AV Scanners not available as docker container: 
-    # CEsetScanner, CIkarusScanner, CZavScanner, CCyrenScanner,  CQuickHealScanner, CTrendmicroScanner
-
+  def __init__(self, cfg = "config.cfg", auto_pull = False, start_containers = False):
     self.engines = [CFileInfo, CWindowsDefenderMalicePlugin,
                     CSophosMalicePlugin, CAvastMalicePlugin, CAvgMalicePlugin,
                     CBitDefenderMalicePlugin, CClamAVMalicePlugin, CComodoMalicePlugin,
@@ -1512,19 +829,8 @@ class CMultiAV:
         result = av.results
         result["plugin_type"] = av.plugin_type
         result["speed"] = av.speed.name
-
-        if av.plugin_type == PLUGIN_TYPE.LEGACY:
-          binary_version = av.get_binary_version()
-          engine_version = av.get_engine_data_version()
-
-          result["infected"] = result != {}
-          result["engine"] = binary_version + " " + engine_version
-          result["updated"] = "-"
-          result["has_internet"] = True
-          results[av.name] = result
-        else:
-          result["has_internet"] = av.container_requires_internet
-          results[av.name] = result
+        result["has_internet"] = av.container_requires_internet
+        results[av.name] = result
           
         if scan_success:
           print("[{0}] Scan complete.".format(av.name))
@@ -1616,10 +922,6 @@ class CMultiAV:
       if p.is_disabled():
           return results
 
-      if not isinstance(p, CMalicePlugin):
-          print("Plugin {0} is not a docker plugin. Skipping...".format(p.name))
-          return results
-
       if not p.pull_container():
         raise Exception("pull_container() returned False")
 
@@ -1649,9 +951,6 @@ class CMultiAV:
 
     try:
       if p.is_disabled():
-          return results
-
-      if not isinstance(p, CMalicePlugin):
           return results
       
       if not p.is_container_running():

@@ -139,35 +139,49 @@ class CDbSamples:
     return rows
 
   def insert_scanner(self, name, plugin_type, has_internet, signature_version, engine_version, speed):
-    if type(plugin_type) is PLUGIN_TYPE:
-      plugin_type_value = plugin_type.value
-    else:
+    if isinstance(plugin_type, int):
       plugin_type_value = plugin_type
+    else:
+      plugin_type_value = plugin_type.value
 
     has_internet = 1 if has_internet == True else 0
-      
-    row = self.db.insert("scanners",name=name, plugin_type=plugin_type_value, has_internet=has_internet, speed=speed, \
-                          signature_version=str(signature_version), engine_version=str(engine_version))
-    return row
+    
+    try:
+      row = self.db.insert("scanners",name=name, plugin_type=plugin_type_value, has_internet=has_internet, speed=speed, \
+                            signature_version=str(signature_version), engine_version=str(engine_version))
+      return row
+    except Exception as e:
+      print("Exception update_scanner")
+      print(locals())
+      print(e)
+      return False
     
   def update_scanner(self, name, plugin_type, has_internet, signature_version, engine_version = None, speed=None):
-    if type(plugin_type) is PLUGIN_TYPE:
-      plugin_type_value = plugin_type.value
-    else:
+    # prevent unknown type errors
+    if isinstance(plugin_type, int):
       plugin_type_value = plugin_type
-    
-    where='name = $name'
-    has_internet = 1 if has_internet == True else 0
-    
-    if engine_version is not None:
-      updated_rows = self.db.update("scanners", vars={"name": name}, where=where, \
-                          plugin_type=plugin_type_value, has_internet=has_internet, \
-                          signature_version=str(signature_version), engine_version=str(engine_version))
     else:
-      updated_rows = self.db.update("scanners", vars={"name": name}, where=where, \
-                          plugin_type=plugin_type_value, has_internet=has_internet, \
-                          signature_version=str(signature_version))
+      plugin_type_value = plugin_type.value
     
+    has_internet = 1 if has_internet == True else 0
+
+    # store data
+    where='name = $name'
+
+    try:
+      if engine_version is not None:
+        updated_rows = self.db.update("scanners", vars={"name": name}, where=where, \
+                            plugin_type=plugin_type_value, has_internet=has_internet, \
+                            signature_version=str(signature_version), engine_version=str(engine_version))
+      else:
+        updated_rows = self.db.update("scanners", vars={"name": name}, where=where, \
+                            plugin_type=plugin_type_value, has_internet=has_internet, \
+                            signature_version=str(signature_version))
+    except Exception as e:
+      print("Exception update_scanner")
+      print(locals())
+      print(e)
+
     # insert new scanner if none existed)
     if updated_rows == 0:
       self.insert_scanner(name, plugin_type, has_internet, signature_version, \
@@ -207,7 +221,7 @@ def convert_result_rows_to_ui_datastructure(rows):
           plugin_type = PLUGIN_TYPE(result_data[plugin_name]["plugin_type"])
           result[plugin_type][plugin_name] = result_data[plugin_name]
 
-          if plugin_type == PLUGIN_TYPE.AV or plugin_type == PLUGIN_TYPE.LEGACY:
+          if plugin_type == PLUGIN_TYPE.AV:
             # update statistics
             has_error, error = result_has_error(result_data[plugin_name])
             if not has_error:
@@ -381,7 +395,7 @@ class export_csv:
         result = json.loads(row['result'])
 
         for key, value in result.iteritems():
-          if value["plugin_type"] == PLUGIN_TYPE.LEGACY or value["plugin_type"] == PLUGIN_TYPE.AV:
+          if value["plugin_type"] == PLUGIN_TYPE.AV:
             version = value['engine'].replace('\n', ' ').replace('\r', '') + \
                       ' ' + \
                       value['updated'].replace('\n', ' ').replace('\r', '')
