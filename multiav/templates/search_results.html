@@ -152,8 +152,9 @@ $def result_data_table(plugin_name, plugin_result_data):
                 <tr>
                   <th>Name</th>
                   <th>Result</th>
-                  <th>Engine</th>
-                  <th>Updated</th>
+                  <th>Engine version</th>
+                  <th>Signature version</th>
+                  <th>Internet access</th>
                 </tr>
               $for scanner_name, result in sorted(results[PLUGIN_TYPE.AV].items()):
                 <tr>
@@ -173,6 +174,12 @@ $def result_data_table(plugin_name, plugin_result_data):
                   </td>
                   <td>$result['engine']</td>
                   <td>$result['updated']</td>
+                  <td>
+                  $if result['has_internet'] == 1:
+                      <span style="color:red">&#x25cf; enabled</span>
+                  $else:
+                      <span style="color:green">&#x25cf; disabled</span>
+                  </td>
                 </tr>
               </table>
             </div>

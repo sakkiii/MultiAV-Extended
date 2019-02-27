@@ -56,6 +56,21 @@ $def with (scanners, cpu_count)
                     </div>
                 </div>
             </div>
+            <div id="scansettings" style="display:none">
+                <div class="toggle_checkbox">
+                    <input type="checkbox" name="allowLeak"><span> allow data leak to vendors</span>
+                </div>
+                <div>
+                    <span>Min Scanner Speed</span>
+                    <select name="minspeed">
+                        <option value="all" selected>All</option>
+                        <option value="ultra">Ultra</option>
+                        <option value="fast">Fast</option>
+                        <option value="medium">Medium</option>
+                        <option value="slow">Slow</option>
+                      </select>
+                </div>
+            </div>
             <button id="act-on-upload" class="button" style="display:none">Scan!</button>
             </td>
         </tr>
@@ -87,7 +102,7 @@ $def with (scanners, cpu_count)
                 <td>$scanner['engine_version']</td>
                 <td>$scanner['signature_version']</td>
                 <td>
-                $if scanner["has_inernet"] == "1":
+                $if scanner["has_internet"] == 1:
                     <span style="color:red">&#x25cf; enabled</span>
                 $else:
                     <span style="color:green">&#x25cf; disabled</span>
@@ -95,7 +110,7 @@ $def with (scanners, cpu_count)
             </tr>
     $else:
         <tr>
-            <td colspan="5"><center>No data. Please to a scan or perform an update!</center></td>
+            <td colspan="6"><center>No data. Please to a scan or perform an update!</center></td>
         </tr>
     </table>
     <form method="POST" action="/update" onsubmit="return confirm('Do you really want to update the scanners?')">
@@ -139,6 +154,7 @@ $def with (scanners, cpu_count)
                 submitButton.disabled = true;
             });
             submitButton.style.display = 'block';
+            document.getElementById("scansettings").style.display = 'block';
         },
         drop: function(file){
             var submitButton = document.querySelector("#act-on-upload");
@@ -175,8 +191,22 @@ $def with (scanners, cpu_count)
             else if(myDropzone.getFilesWithStatus(Dropzone.ADDED).length == 0 && myDropzone.getFilesWithStatus(Dropzone.UPLOADING).length == 0 ){
                 window.location.href = "/search?id=" + reportIds.join(",");
             }
+        },
+        sending: function(file, xhr, formdata) {
+            let field = document.querySelector("#scansettings select");
+            formdata.append("minspeed", field.value);
+            field = document.querySelector("#scansettings input");
+            formdata.append("allow_internet", field.checked? "true": "false");
         }
     };
+
+    document.querySelector(".toggle_checkbox").onclick = function(e){
+        if(e.target.localName != "input") {
+            let c = document.querySelector(".toggle_checkbox input[type=checkbox]");
+            c.checked = !c.checked;
+        }
+    };
+    
 </script>
 </body>
 </html>

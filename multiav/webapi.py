@@ -144,6 +144,8 @@ class CDbSamples:
       plugin_type_value = plugin_type.value
     else:
       plugin_type_value = plugin_type
+
+    has_internet = 1 if has_internet == True else 0
       
     row = self.db.insert("scanners",name=name, plugin_type=plugin_type_value, has_internet=has_internet, \
                           signature_version=str(signature_version), engine_version=str(engine_version), active=active)
@@ -156,6 +158,7 @@ class CDbSamples:
       plugin_type_value = plugin_type
     
     where='name = $name'
+    has_internet = 1 if has_internet == True else 0
     
     if engine_version is not None:
       updated_rows = self.db.update("scanners", vars={"name": name}, where=where, \
@@ -511,12 +514,23 @@ class api_search:
 # -----------------------------------------------------------------------
 class api_upload:
   def POST(self):
-    i = web.input(file_upload={})
+    i = web.input(file_upload={}, minspeed="all", allow_internet="false")
     if "file_upload" not in i or i["file_upload"] is None or i["file_upload"] == "":
       return '{"error": "No file uploaded or invalid file."}'
 
     buf = i["file_upload"].value
     filename = i["file_upload"].filename
+
+    speeds = {
+      "all": AV_SPEED.ALL,
+      "ultra": AV_SPEED.ULTRA,
+      "fast": AV_SPEED.FAST,
+      "medium": AV_SPEED.MEDIUM,
+      "slow": AV_SPEED.SLOW
+    }
+
+    av_min_speed = speeds[i["minspeed"]]
+    av_allow_internet = i["allow_internet"] == "true"
 
     # Setup the report
     report = {
@@ -533,7 +547,7 @@ class api_upload:
 
     # Scan the file
     av = CMultiAV()
-    scan_results = av.scan_buffer(buf)
+    scan_results = av.scan_buffer(buf, av_min_speed, av_allow_internet)
     print("webapi: scan complete")
     report.update(scan_results)
     print("webapi: update report dict complete")
@@ -553,7 +567,7 @@ class api_upload:
       signature_version = scan_results[scanner_name]["updated"] if "updated" in scan_results[scanner_name] else "-"
       engine_version = scan_results[scanner_name]["engine"] if "engine" in scan_results[scanner_name] else "-"
       plugin_type = scan_results[scanner_name]["plugin_type"]
-      has_internet = scan_results[scanner_name]["has_inernet"]
+      has_internet = scan_results[scanner_name]["has_internet"]
 
       db_api.update_scanner(scanner_name, plugin_type, has_internet, signature_version, engine_version)
 

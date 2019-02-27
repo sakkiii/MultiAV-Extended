@@ -387,9 +387,6 @@ class CMalicePlugin(CAvScanner):
         print("[{0}] Scan time: {1}s seconds".format(self.name, (time.time() - start_time)))
         response_obj = json.loads(response.text)
         
-        # set additional response fields
-        response_obj["has_internet"] = self.container_requires_internet
-        
         # store
         self.store_results(response_obj)
         
@@ -398,12 +395,13 @@ class CMalicePlugin(CAvScanner):
       except Exception as e:
         retry_counter += 1
         self.results = { 
-          "error": str(e),
+          "error": "{0}".format(e),
           "infected": False,
           "engine": "-",
           "updated": "-",
           "has_internet": self.container_requires_internet
         }
+        print("[{0}] Exception in scan method".format(self.name))
         print(e)
       
       print("[{0}] Error while scanning the file. retrying now (counter {1})...".format(self.container_name, retry_counter))
@@ -514,7 +512,7 @@ class CMaliceHashPlugin(CMalicePlugin):
           buf = binary_file.read()
 
         # build request params
-        url = "http://" + self.container_api_host + ":" + self.container_api_port + "/" + self.container_api_endpoint + "/" + sha1(buf).hexdigest()
+        url = "http://{0}:{1}/{2}/{3}".format(self.container_api_host, self.container_api_port, self.container_api_endpoint, sha1(buf).hexdigest())
 
         # post
         start_time = time.time()
@@ -1476,29 +1474,33 @@ class CMultiAV:
 
     return self.is_internet_network_existing()
 
-  def multi_scan(self, path, max_speed):
-    engines = list(self.engines)
-    return self.exec_func_multi_processes(random.sample(engines, len(engines)), self.scan_one, (path, max_speed))
-
-  def scan(self, path, max_speed=AV_SPEED.ALL):
+  def scan(self, path, max_speed=AV_SPEED.ALL, allow_internet=False):
     if not os.path.exists(path):
       raise Exception("Path not found")
 
     if self.processes > 1:
-      return self.multi_scan(path, max_speed)
+      return self.multi_scan(path, max_speed, allow_internet)
     else:
-      return self.single_scan(path, max_speed)
+      return self.single_scan(path, max_speed, allow_internet)
+    
+  def multi_scan(self, path, max_speed, allow_internet=False):
+    engines = list(self.engines)
+    return self.exec_func_multi_processes(random.sample(engines, len(engines)), self.scan_one, (path, max_speed, allow_internet))
 
-  def single_scan(self, path, max_speed=AV_SPEED.ALL):
+  def single_scan(self, path, max_speed=AV_SPEED.ALL, allow_internet=False):
     results = {PLUGIN_TYPE.AV: {}, PLUGIN_TYPE.METADATA: {}}
     for av_engine in self.engines:
-      results.update(self.scan_one(av_engine, results, path=path, max_speed=max_speed))
+      results.update(self.scan_one(av_engine, results, path=path, max_speed=max_speed, allow_internet=allow_internet))
     return results
 
-  def scan_one(self, av_engine, results, q=None, path=None, max_speed = None):
+  def scan_one(self, av_engine, results, q=None, path=None, max_speed = None, allow_internet=False):
     with self.updateMutex.reader_lock:
       av = av_engine(self.parser)
       if av.is_disabled():
+        return results
+
+      if av.container_requires_internet == True and not allow_internet:
+        print("[{0}] Skipping. Internet policy doesn't match".format(av.name))
         return results
       
       if max_speed == None or av.speed.value <= max_speed.value:
@@ -1515,8 +1517,10 @@ class CMultiAV:
           result["infected"] = result != {}
           result["engine"] = binary_version + " " + engine_version
           result["updated"] = "-"
+          result["has_internet"] = True
           results[av.name] = result
         else:
+          result["has_internet"] = av.container_requires_internet
           results[av.name] = result
           
         if scan_success:
@@ -1532,7 +1536,7 @@ class CMultiAV:
       print("[{0}] Scan routine complete.".format(av.name))
       return True
 
-  def scan_buffer(self, buf, max_speed=AV_SPEED.ALL):
+  def scan_buffer(self, buf, max_speed=AV_SPEED.ALL, allow_internet=False):
     f = NamedTemporaryFile(delete=False)
     f.write(buf)
     f.close()
@@ -1541,7 +1545,7 @@ class CMultiAV:
     os.chmod(f.name, 436)
 
     try:
-      ret = self.scan(fname, max_speed)
+      ret = self.scan(fname, max_speed, allow_internet)
     finally:
       print("unlinking file")
       os.unlink(fname)
@@ -1557,7 +1561,8 @@ class CMultiAV:
     
       scanners[av.name] = {
         'signature_version': av.get_signature_version(),
-        'plugin_type': av.plugin_type
+        'plugin_type': av.plugin_type,
+        'has_internet': av.container_requires_internet
       }
     
     return scanners
