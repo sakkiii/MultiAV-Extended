@@ -111,7 +111,8 @@ h1 {
 #scansettings {
   padding-left: 200px;
   color: #666666;
-  font-size: 14px;
+  font-size: 13.33px;
+  user-select: none;
 }
 
 #scansettings div{    
@@ -125,6 +126,10 @@ h1 {
 }
 
 #scansettings .toggle_checkbox{
+  cursor: pointer;
+}
+
+#scansettings .toggle_checkbox input{
   cursor: pointer;
 }
 
