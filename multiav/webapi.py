@@ -60,8 +60,7 @@ class CDbSamples:
                                                 plugin_type integer,
                                                 signature_version text,
                                                 engine_version text,
-                                                has_internet integer,
-                                                active integer)""")
+                                                has_internet integer)""")
       except:
         print("Error:", sys.exc_info())[1]
 
@@ -139,7 +138,7 @@ class CDbSamples:
     rows = self.db.select("scanners", where=where, vals={'name': name})
     return rows
 
-  def insert_scanner(self, name, plugin_type, has_internet, signature_version, engine_version, active):
+  def insert_scanner(self, name, plugin_type, has_internet, signature_version, engine_version):
     if type(plugin_type) is PLUGIN_TYPE:
       plugin_type_value = plugin_type.value
     else:
@@ -148,7 +147,7 @@ class CDbSamples:
     has_internet = 1 if has_internet == True else 0
       
     row = self.db.insert("scanners",name=name, plugin_type=plugin_type_value, has_internet=has_internet, \
-                          signature_version=str(signature_version), engine_version=str(engine_version), active=active)
+                          signature_version=str(signature_version), engine_version=str(engine_version))
     return row
     
   def update_scanner(self, name, plugin_type, has_internet, signature_version, engine_version = None):
@@ -171,13 +170,8 @@ class CDbSamples:
     
     # insert new scanner if none existed)
     if updated_rows == 0:
-      self.insert_scanner(name, plugin_type, has_internet, signature_version, engine_version if engine_version is not None else "-", True)
+      self.insert_scanner(name, plugin_type, has_internet, signature_version, engine_version if engine_version is not None else "-")
 
-    return updated_rows
-
-  def update_scanner_active(self, name, active):
-    where='name = $name'
-    updated_rows = self.db.update("scanners", vars={"name": name}, where=where, active=active)
     return updated_rows
 
 # -----------------------------------------------------------------------
@@ -672,15 +666,8 @@ class update:
     av = CMultiAV()
     update_results = av.update()
 
-    # Set old / new versions in result
+    # Update DB with new versions    
     db_api = CDbSamples()
-    db_scanners = db_api.get_scanners().list()
-
-    # Update DB with new versions
-    for scanner in db_scanners:
-      if not scanner.name in update_results:
-        db_api.update_scanner_active(scanner.name, False)
-    
     for scanner in update_results:
       update_successs = update_results[scanner]['status'] != "error"
       

@@ -79,7 +79,6 @@ $def with (scanners, cpu_count)
     <p>MultiAV Plugin(s) Overview:</p>
     <table id="data" class="data-table">
         <tr>
-            <th>Active</th>
             <th>Name</th>
             <th>Plugin type</th>
             <th>Engine version</th>
@@ -89,12 +88,6 @@ $def with (scanners, cpu_count)
     $if len(scanners) != 0:
         $for scanner in sorted(scanners, key=lambda x: x["name"]):
             <tr>
-                <td>
-                $if scanner["active"] == "1":
-                    <span style="color:green">&#x25cf;</span>
-                $else:
-                    <span style="color:darkred">&#x25cf;</span>
-                </td>
                 <td>$scanner['name']</td>
                 <td>
                     $plugin_type_to_string(scanner["plugin_type"])
