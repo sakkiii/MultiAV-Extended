@@ -65,6 +65,7 @@ $def result_data_table(plugin_name, plugin_result_data):
         </div>
     </div>
     $ result_count = 0
+    $ add_autorefresh = False
 
     <div class="content">
     $for results in result_array:
@@ -186,17 +187,24 @@ $def result_data_table(plugin_name, plugin_result_data):
                   <tr>
                     <td>$scanner_name</td>
                     <td>
-                      $ has_error, error = result_has_error(result)
-                      $if has_error:
-                          <span style="color:darkred">&#x25cf;</span> $error
+                      $if "queued" in result:
+                        <span style="color:grey">&#x25cf;</span> queued...
+                        $ add_autorefresh = True
+                      $elif "scanning" in result:
+                        <span style="color:orange">&#x25cf;</span> scanning...
+                        $ add_autorefresh = True
                       $else:
-                        $if result["infected"]:
-                          $if "results" in result.keys():
-                            <span style="color:red">&#x25cf;</span> $:"".join(list(map(lambda kv: kv[0] + ": " + kv[1], result['results'].items())))
-                          $else:
-                            <span style="color:red">&#x25cf;</span> $result['result']
+                        $ has_error, error = result_has_error(result)
+                        $if has_error:
+                            <span style="color:darkred">&#x25cf;</span> $error
                         $else:
-                          <span style="color:green">&#x25cf;</span> Clean
+                          $if result["infected"]:
+                            $if "results" in result.keys():
+                              <span style="color:red">&#x25cf;</span> $:"".join(list(map(lambda kv: kv[0] + ": " + kv[1], result['results'].items())))
+                            $else:
+                              <span style="color:red">&#x25cf;</span> $result['result']
+                          $else:
+                            <span style="color:green">&#x25cf;</span> Clean
                     </td>
                     <td>$result['engine']</td>
                     <td>$result['updated']</td>
@@ -225,6 +233,12 @@ $def result_data_table(plugin_name, plugin_result_data):
         </tr>
       </table>
   </div>
+  $if add_autorefresh:
+    <script>
+      setTimeout(function () {
+        window.location.href = window.location.href;
+      }, 5000);
+    </script>
   <script src="static/multiav.js" type="text/javascript"></script>
 </body>
 </html>

@@ -1,0 +1,441 @@
+import time
+import threading
+import json
+import uuid
+import os
+
+from threading import Lock
+from promise import Promise
+from promise.schedulers.thread import ThreadScheduler
+from subprocess import Popen, PIPE, check_output, CalledProcessError
+
+from multiav.exceptions import CreateDockerMachineMachineException
+from multiav.multiactionpromise import MultiActionPromise
+from multiav.pluginexecutorpool import PluginExecutorPool
+from multiav.safeconfigparserextended import SafeConfigParserExtended
+from multiav.dockerabstraction import LocalStaticDockerMachine, LocalDynamicDockerMachine, DockerMachineMachine, DockerContainer, DockerMachine
+
+DOCKER_NETWORK_NO_INTERNET_NAME = "multiav-no-internet-bridge"
+DOCKER_NETWORK_INTERNET_NAME = "multiav-internet-bridge"
+  
+#-----------------------------------------------------------------------
+class ScannerStrategy:
+    def __init__(self, config_name):
+        self._config_name = config_name
+        self._event_subscribers = dict()
+
+        self._read_config()
+    
+    def _read_config(self):
+        parser = SafeConfigParserExtended()
+        parser.optionxform = str
+        parser.read(self._config_name)
+        self.cfg_parser = parser
+
+    def _scan_internal(self, engine, file_buffer):
+        try:
+            self._pre_scan(engine, file_buffer)
+            
+            # set container for scan
+            engine.container = self._get_container_for_scan(engine, file_buffer)
+
+            print("[{0}] Scanning {1} using {2} on container {3} on machine {4}".format(engine.name, file_buffer, engine.name, engine.container.id, engine.container.machine.id))
+            res = engine.scan(file_buffer)
+
+            res["name"] = engine.name
+            res["plugin_type"] = engine.plugin_type.value
+            res["speed"] = engine.speed.value
+            res["has_internet"] = engine.container_requires_internet
+            
+            if not "error" in res.keys():
+                print("[{0}] Scan complete.".format(engine.name))
+            else:
+                print("[{0}] Scan failed. Error: {1}".format(engine.name, res["error"]))
+            
+            self._post_scan(engine, file_buffer)
+            return res
+        except Exception as e:
+            print("[{0}] Scan internal error: {1}".format(engine.name, e))
+            return {
+                "name": engine.name,
+                "error": "{0}".format(e),
+                "engine": "",
+                "updated": "",
+                "plugin_type": engine.plugin_type.value,
+                "speed": engine.speed.value,
+                "has_internet": engine.container_requires_internet
+            }
+    
+    def _rise_event(self, event, file_to_scan, *args, **kargs):
+        if event in self._event_subscribers and file_to_scan in self._event_subscribers[event]:
+            for handler in self._event_subscribers[event][file_to_scan]:
+                handler(*args, **kargs)
+
+    def on(self, event, file_to_scan, handler):
+        if event in self._event_subscribers and file_to_scan in self._event_subscribers[event]:
+            self._event_subscribers[event][file_to_scan].append(handler)
+        else:
+            self._event_subscribers[event] = {file_to_scan: [handler]}
+            print(self._event_subscribers)
+    
+    def unsubscribe_event_handler(self, event, file_to_scan, handler):
+        if event in self._event_subscribers and file_to_scan in self._event_subscribers[event]:
+            self._event_subscribers[event][file_to_scan].remove(handler)
+
+    def _pre_scan(self, engine, file_to_scan):
+        self._rise_event("pre", file_to_scan, engine, file_to_scan)
+
+    def _post_scan(self, engine, file_to_scan):
+        self._rise_event("post", file_to_scan, engine, file_to_scan)
+
+    def startup(self, engines):
+        self.engine_classes = []
+        for engine in engines:
+            self.engine_classes.append(engine)
+        
+        self._startup()
+    
+    def _startup(self):
+        # abstract
+        pass
+    
+    def _get_container_for_scan(self, engine, file_to_scan):
+        #abstract
+        pass
+
+    def scan(self, engine, file_buffer):
+        # abstract
+        pass
+    
+    def update(self):
+        # abstract
+        pass
+    
+    def get_signature_version(self, engine):
+        # abstract
+        pass
+
+#-----------------------------------------------------------------------
+class LocalDockerStrategy(ScannerStrategy):
+    def __init__(self, config_name):
+        ScannerStrategy.__init__(self, config_name)
+        self.DOCKER_NETWORK_NO_INTERNET_NAME = DOCKER_NETWORK_NO_INTERNET_NAME
+        self.DOCKER_NETWORK_INTERNET_NAME = DOCKER_NETWORK_INTERNET_NAME
+        self.machine = None
+
+    def _start_containers(self, engines):
+        for engine in engines:
+            if engine.is_disabled():
+                continue
+            
+            if not self.machine.create_container(engine):
+                return False
+        return True
+    
+    def _startup(self):
+        self.machine = LocalStaticDockerMachine(self.cfg_parser, self.engine_classes, id_overwrite="localhost")
+        
+    def _get_container_for_scan(self, engine, file_to_scan):
+        # search for a free spot on the local machine 
+        container = self.machine.try_do_scan(engine, file_to_scan)
+
+        return container
+
+    def scan(self):
+        # abstract
+        pass
+
+    def update(self):
+        return self.machine.update()
+
+    def get_signature_version(self, engine):
+        containers = self.machine.find_containers_by_engine(engine)
+
+        if len(containers) == 0:
+            return "-"
+        
+        for container in containers:
+            if container.is_running():
+                return containers[0].get_signature_version()
+        
+        return "-"
+
+#-----------------------------------------------------------------------
+class LimitedLocalDockerStrategy(LocalDockerStrategy):
+    def __init__(self, config_name, num_threads):
+        LocalDockerStrategy.__init__(self, config_name)
+
+        # use thread pool to handle overload without scaling
+        self.pool = PluginExecutorPool(num_threads)
+        print("LocalDockerStrategy: initialized thread pool using {0} threads".format(num_threads))
+        
+    def scan(self, plugin, file_buffer):
+        scan_promise = self.pool.add_task(self._scan_internal, plugin, file_buffer)
+        return scan_promise
+    
+#-----------------------------------------------------------------------
+class JustRunLocalDockerStrategy(LocalDockerStrategy):
+    def __init__(self, config_name):
+        LocalDockerStrategy.__init__(self, config_name)
+
+        # thread array, not limited in size
+        self.threads = []
+
+    def _scan_promise_wrapper(self, resolve, reject, engine, file_buffer):
+        def fn():
+            try:
+                res = self._scan_internal(engine, file_buffer)
+                resolve(json.dumps(res))
+            except Exception as e:
+                print("[{1}] _scan_promise_wrapper exception: {0}".format(e, engine.name))
+                reject(e)
+            finally:
+                # make sure to remove thread from running list
+                self.threads.remove(thread)
+        
+        thread = threading.Thread(target=fn)
+        self.threads.append(thread)
+        thread.start()
+
+    def scan(self, plugin, file_buffer):
+        scan_promise = Promise(
+            lambda resolve, reject: self._scan_promise_wrapper(resolve, reject, plugin, file_buffer)
+        )
+        return scan_promise
+
+#-----------------------------------------------------------------------       
+class AutoScaleDockerStrategy(ScannerStrategy):
+    def __init__(self, config_name, max_machines, max_containers_per_machine, max_scans_per_container, min_machines = 1, initial_scan_time_average = 10, expected_machine_startup_time = 300, minimal_machine_run_time = 480):
+        ScannerStrategy.__init__(self, config_name)
+        # variables
+        self.scan_time_average = (50, initial_scan_time_average)
+        self.expected_machine_startup_time = expected_machine_startup_time
+        self.minimal_machine_run_time = minimal_machine_run_time
+        self.min_machines = min_machines
+
+        # use thread pool to handle overload when maxed out scaling => tasks will stay in queue
+        self._min_workers = max_containers_per_machine * max_scans_per_container
+        self._max_workers = max_machines * max_containers_per_machine * max_scans_per_container
+        self.pool = PluginExecutorPool(self._min_workers, self._max_workers)
+        print("AutoScaleDockerStrategy: initialized thread pool using {0} threads (max: {1})".format(self._min_workers, self._max_workers))
+
+        self._machines = []
+        self.max_machines = max_machines
+        self.max_containers_per_machine = max_containers_per_machine
+        self.max_scans_per_container = max_scans_per_container
+        print("AutoScaleDockerStrategy: initialized using min_machines: {0} max_machines: {1} max_containers_per_machine: {2} max_scans_per_container: {3}".format(min_machines, max_machines, max_containers_per_machine, max_scans_per_container))
+
+    def _execute_command(self, command):
+        try:
+            output = check_output(command.split(" "))
+        except CalledProcessError as e:
+            output = e.output
+        
+        return str(output)
+
+    def _get_average_scan_time(self):
+        return self.scan_time_average[1] / self.scan_time_average[0]
+
+    def _list_docker_machines(self):
+        cmd = "docker-machine ls"
+        response = self._execute_command(cmd)
+        machines = list(map(lambda x: list(filter(lambda q: q != "", x.split(" "))), response.split("\\n")[1:]))
+        # [['multiav-test', '-', 'openstack', 'Running', 'tcp://10.0.0.51:2376', 'v18.09.3'], ...]
+        print(machines)
+        return machines
+
+    def _startup(self):
+        # check for running machines
+        started_machine_counter = 0
+        running_machines = self._list_docker_machines()
+        for machine in running_machines:
+            # create instance for handling
+            if len(machine) == 0:
+                continue
+
+            never_shutdown = started_machine_counter < self.min_machines
+            instance = DockerMachineMachine(self.cfg_parser, self.engine_classes, self.max_containers_per_machine, self.max_scans_per_container, create_machine = False, minimal_machine_run_time = self.minimal_machine_run_time, id_overwrite = machine[0], never_shutdown=never_shutdown)
+
+            # descide what to do
+            if not "Running" in machine:
+                print("detected running machine {0} in ERRORNEOUS state!".format(machine[0]))
+                if not instance.try_shutdown():
+                    print("tried to clean up machine {0} but failed. please clean up manually!".format(machine[0]))
+                    continue
+                
+                print("machine {0} removed to regain a clean state...".format(machine[0]))
+            else:
+                print("detected running machine {0} in operational state".format(machine[0]))
+                self._machines.append(instance)
+                started_machine_counter += 1
+                print("readding machine {0} to the list of machines now...".format(machine[0]))
+        
+        if len(self._machines) != 0:
+            print("readded {0} machines which were already runnning. try clean shut down next time...".format(len(self._machines)))
+
+        # do we need to start machines to satisfy min_machines requirement?
+        if len(self._machines) < self.min_machines:
+            amount_of_machines_to_start = self.min_machines - len(self._machines)
+            print("starting {0} machines due to min_machines requirement now...".format(amount_of_machines_to_start))
+            for i in range(0, amount_of_machines_to_start):
+                if self._create_machine() == None:
+                    print("could not create machine on first try. retrying now...")
+                    if self._create_machine() == None:
+                        raise CreateDockerMachineMachineException()
+
+    def _post_scan(self, engine, file_path):
+        try:
+            # call super class
+            ScannerStrategy._post_scan(self, engine, file_path)
+
+            # remove scan from container
+            print("_post_scan: removing scan {0} from container {1}".format(file_path, engine.container.id))
+            engine.container.remove_scan(file_path)
+
+            # remove scan from machine if required TODO thread safe
+            print("checking if we need to cleanup the scan file {1} on the target machine {0}".format(file_path, engine.container.machine.id))
+            local_filename = os.path.basename(file_path)
+            if len(engine.container.machine.find_scans_by_file_path(file_path)) == 0:
+                print("removing file {0} from machine {1} as its not used by a scan anymore".format(file_path, engine.container.machine.id))
+                cmd = "docker-machine ssh {0} rm /tmp/{1}".format(engine.container.machine.id, local_filename)
+                DockerMachine.execute_command(engine.container.machine, cmd)
+            
+            # remove / stop container if needed
+            if self.max_scans_per_container == 1:
+                engine.container.machine.remove_container(engine.container)
+            
+        except Exception as e:
+            print("_post_scan Exception: {0}".format(e))
+            
+    def _create_machine(self):
+        if len(self._machines) + 1 > self.max_machines:
+            return None
+        try:
+            machine = DockerMachineMachine(self.cfg_parser, self.engine_classes, self.max_containers_per_machine, self.max_scans_per_container, True, self.minimal_machine_run_time)
+            machine.on("shutdown", self._on_machine_shutdown)
+            self._machines.append(machine)
+            
+            print("starting new machine {0}".format(machine.id))
+            return machine
+        except CreateDockerMachineMachineException as e:
+            print(e)
+            return None
+        
+    def _on_machine_shutdown(self, machine):
+        print("_on_machine_shutdown")
+        self._machines.remove(machine)
+        print("removed machine {0}!".format(machine.id))
+
+    def _get_container_for_scan(self, engine, file_path):
+        container = None
+        machine = None
+
+        # search for a free spot on a running machine 
+        for m in self._machines:
+            print("looking for container with engine {1} on machine {0}".format(m.id, engine.name))
+            container, machine = m.try_do_scan(engine, file_path)
+            if container is not None:
+                print("found container {0} with engine {2} on machine {1}".format(container.id, machine.id, engine.name))
+                break
+            
+        if container is None:
+            m = self._create_machine()
+            container, machine = m.try_do_scan(engine, file_path)
+            if container is None:
+                raise Exception("Could not get a container on a newly created machine. something's wrong...")
+
+            print("created container {0} with engine {2} on machine {1}".format(container.id, machine.id, engine.name))
+
+        # copy scan to target machine if required
+        local_filename = os.path.basename(file_path)
+        if not "No such file or directory" in DockerMachine.execute_command(machine, "docker-machine ssh {0} ls {1}".format(machine.id, file_path)):
+            #docker-machine scp [[user@]machine:][path] [[user@]machine:][path].
+            cmd = "docker-machine scp {0} {1}:/tmp/{2}".format(file_path, machine.id, local_filename)
+            output = DockerMachine.execute_command(machine, cmd)
+        
+            if "scp: " in output: #error case
+                raise Exception("could not scp file to machine!")
+                
+        return container
+
+    def _increase_workforce_if_possible(self):
+        queue_size = self.pool.get_queue_size()
+        worker_amount = self.pool.get_worker_amount()
+        
+        if queue_size <= worker_amount:
+            return
+
+        if worker_amount == self._max_workers:
+            return
+        
+        # no machine start requiered, do it
+        max_scans_per_machine = self.max_containers_per_machine * self.max_scans_per_container
+        if max_scans_per_machine % worker_amount != 0:
+            print("creating worker for existing machine")
+            self.pool.add_worker()
+            return
+        
+        # would require machine start. is it worth it?
+        time_to_finish_current_queue = (queue_size * self._get_average_scan_time()) / len(self._machines)
+        print("time to finish queue {0}".format(time_to_finish_current_queue))
+        if time_to_finish_current_queue < self.expected_machine_startup_time:
+            # finishing the queue is faster than starting a new machine
+            return
+        
+        # start new machine by adding a worker who will do it pre scan
+        print("creating worker: machine starts soon")
+        self.pool.add_worker()
+
+    def scan(self, engine, file_buffer):
+        scan_promise = self.pool.add_task(self._scan_internal, engine, file_buffer)
+
+        # increase workforce if required and possible
+        self._increase_workforce_if_possible()
+
+        return scan_promise
+    
+    def get_signature_version(self, engine):
+        containers = self._machines[0].find_containers_by_engine(engine)
+        
+        if len(containers) == 0:
+            return "-"
+        
+        for container in containers:
+            if container.is_running():
+                return container.get_signature_version()
+        
+        return "-"
+
+    def update(self):
+        machine_update_promises = dict()
+        update_promise = MultiActionPromise()
+
+        for engine_class in self.engine_classes:
+            engine = engine_class(self.cfg_parser)
+
+            if engine.is_disabled():
+                continue
+            
+            update_promise.engine_promises[engine] = Promise(None, ThreadScheduler())
+
+        def check_if_this_engine_is_updated_on_all_machines(engine, result):
+            not_pending = True
+            for promise in machine_update_promises[engine]:
+                not_pending &= not promise.is_pending()
+            
+            if not_pending:
+                # last one will trigger this
+                update_promise.engine_promises[engine].do_resolve(result)
+
+        for machine in self._machines:
+            machine_update_promise = machine.update()
+
+            for engine, engine_update_promise in machine_update_promise.engine_promises:
+                engine_update_promise.then(
+                    lambda result: check_if_this_engine_is_updated_on_all_machines(engine, result),
+                    lambda result: check_if_this_engine_is_updated_on_all_machines(engine, result),
+                )
+                machine_update_promises[engine].append(engine_update_promise)
+        
+        return update_promise
+

@@ -15,6 +15,24 @@ h1 {
   color: #333333;
 }
 
+dl {
+  width: 100%;
+  overflow: hidden;
+  padding: 0;
+  margin: 0;
+}
+dt {
+  float: left;
+  width: 10%;
+  padding: 0;
+  margin: 0;
+  font-weight:bold;
+}
+dd {
+  padding: 0;
+  margin: 0;
+}
+
 .header {
   position: fixed;
   display: flex; 

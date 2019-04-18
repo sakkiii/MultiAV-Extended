@@ -2,18 +2,24 @@ import os
 import sys
 import json
 import time
-
+import datetime
 import web
+
 from hashlib import md5, sha1, sha256
 from itertools import groupby
 from multiprocessing import cpu_count
-from multiav.core import CMultiAV, AV_SPEED, PLUGIN_TYPE, EnumEncoder
+
+from multiav.core import CMultiAV, AV_SPEED, PLUGIN_TYPE
+from multiav.enumencoder import EnumEncoder
+from multiav.scannerstrategy import JustRunLocalDockerStrategy, LimitedLocalDockerStrategy, AutoScaleDockerStrategy
+from multiav.exceptions import PullPluginException, StartPluginException, CreateNetworkException
 
 urls = (
     '/', 'index',
     '/upload', 'upload',
     '/api/upload', 'api_upload',
     '/api/search', 'api_search',
+    '/api/report', 'api_report',
     '/about', 'about',
     '/last', 'last',
     '/search', 'search',
@@ -25,6 +31,21 @@ app = web.application(urls, globals())
 ROOT_PATH = os.path.dirname(__file__)
 CURRENT_PATH = os.getcwd()
 TEMPLATE_PATH = os.path.join(os.path.dirname(__file__), 'templates')
+
+# MultiAV Instance
+try:
+  config_name = "config.cfg"
+  scanner_strategy = AutoScaleDockerStrategy(config_name, min_machines=2, max_machines = 5, max_containers_per_machine = 40, max_scans_per_container = 1)
+  CAV = CMultiAV(scanner_strategy, config_name, auto_start=True, auto_pull=True)
+except PullPluginException as e:
+  print(e)
+  exit(2)
+except StartPluginException as e:
+  print(e)
+  exit(3)
+except CreateNetworkException as e:
+  print(e)
+  exit(4)
 
 if not os.path.isdir(os.path.join(CURRENT_PATH, 'static')):
     raise Exception('runserver.py must be run in the directory {0}'.format(ROOT_PATH))
@@ -51,7 +72,6 @@ class CDbSamples:
                                                 sample_id integer,
                                                 infected integer,
                                                 date text,
-                                                result text,
                                                 FOREIGN KEY(sample_id) REFERENCES samples(id) ON DELETE CASCADE)""")
         self.db.query("""create table if not exists scanners(
                                                 id integer not null primary key autoincrement,
@@ -61,21 +81,38 @@ class CDbSamples:
                                                 engine_version text,
                                                 has_internet integer,
                                                 speed text)""")
+        self.db.query("""create table if not exists results(
+                                                id integer not null primary key autoincrement,
+                                                report_id integer,
+                                                scanner_id integer,
+                                                result text,
+                                                FOREIGN KEY(report_id) REFERENCES reports(id) ON DELETE CASCADE,
+                                                FOREIGN KEY(scanner_id) REFERENCES scanners(id) ON DELETE CASCADE)""")
       except:
         print("Error:", sys.exc_info())[1]
 
-  def insert_sample_report(self, name, buf, reports):
+  def finish_sample_report(self, report_id):
+    where = 'report_id like $report_id'
+    rows = self.db.select("results", where=where, vals={'report_id': report_id}).list()
+
     # calculate infected percentage
     result_clean = 0
-    for av_name in reports:
-      if 'result' in reports[av_name]:
-        if reports[av_name]['result'] != {}:
-          result_clean += 1
+    for row in rows:
+      result = json.loads(row['result'])
+      if not result["infected"]:
+        result_clean += 1
 
     if result_clean == 0:
       infected = 0
     else:
-      infected = ( result_clean / len(reports) ) * 100
+      infected = ( result_clean / len(rows) ) * 100
+    
+    self.db.update("results", vars={'report_id': report_id}, where=where, infected=infected)
+
+
+  def create_sample_report(self, name, buf):
+    # default values
+    infected = -1
 
     # calculate file properties
     md5_hash = md5(buf).hexdigest()
@@ -94,39 +131,91 @@ class CDbSamples:
         sample_id = res[0].id
 
         # insert report with sample_id
-        report_id = self.db.insert('reports', infected=infected, date=time.asctime(), sample_id=sample_id, result=json.dumps(reports, cls=EnumEncoder) )
+        report_id = self.db.insert('reports', infected=infected, date=time.asctime(), sample_id=sample_id)
 
         return report_id
       except:
         print("Error:", sys.exc_info()[1], md5_hash, sha1_hash, sha256_hash)
         return -1
+  
+  def add_scan_result(self, report_id, result):
+    # result e.g. {u'engine': u'0.100.2', u'updated': u'20190219', u'name': u'ClamAVMalice', u'has_internet': False, u'infected': False, u'result': u'', u'speed': u'ULTRA', u'plugin_type': u'AV'}
+    try:
+      scanners = self.get_scanner(result["name"]).list()
+
+      if len(scanners) == 0:
+        scanner_id = self.insert_scanner(result["name"], int(result["plugin_type"]), result["has_internet"], result["updated"], result["engine"], int(result["speed"]))
+      else:
+        scanner_id = scanners[0]["id"]
+      
+      self.db.insert('results', report_id=report_id, scanner_id=scanner_id, result=json.dumps(result, cls=EnumEncoder))
+    except Exception as e:
+      print(e)
+
+  def update_scan_result(self, report_id, result):
+    try:      
+      scanner_id = self.get_scanner(result["name"]).list()[0]["id"]
+      where = 'report_id == $report_id AND scanner_id == $scanner_id'
+      self.db.update('results', where=where, vars={'report_id': report_id, 'scanner_id': scanner_id}, result=json.dumps(result, cls=EnumEncoder))
+    except Exception as e:
+      print(e)
+
+  def search_results_by_report_id(self, report_id):
+    where = 'report_id == $report_id'
+    rows = self.db.select("results", where=where, vars={'report_id': report_id}).list()
+    return list(map(lambda row: row["result"], rows))
 
   def search_report_by_id(self, report_id):
-    query = "SELECT samples.id,samples.name,samples.md5,samples.sha1,samples.sha256,samples.size,reports.id AS report_id,reports.infected,reports.date,reports.result FROM samples LEFT JOIN reports ON samples.id = reports.sample_id WHERE report_id = $report_id"
-    rows = self.db.query(query, vars={"report_id": report_id})
+    query = "SELECT samples.id,samples.name,samples.md5,samples.sha1,samples.sha256,samples.size,reports.id AS report_id,reports.infected,reports.date " \
+            "FROM samples " \
+            "LEFT JOIN reports ON samples.id = reports.sample_id " \
+            "WHERE report_id = $report_id"
+    rows = self.db.query(query, vars={"report_id": report_id}).list()
+    for row in rows:
+      row["result"] = self.search_results_by_report_id(report_id)
     return rows
 
   def search_sample_by_hash(self, file_hash):
-    query = "SELECT samples.id,samples.name,samples.md5,samples.sha1,samples.sha256,samples.size,reports.id AS report_id,reports.infected,reports.date,reports.result FROM samples LEFT JOIN reports ON samples.id = reports.sample_id WHERE md5=$hash OR sha1=$hash OR sha256=$hash OR samples.name like $hash"
+    query = "SELECT samples.id,samples.name,samples.md5,samples.sha1,samples.sha256,samples.size,reports.id AS report_id,reports.infected,reports.date,results.result " \
+            "FROM samples " \
+            "LEFT JOIN reports ON samples.id = reports.sample_id " \
+            "LEFT JOIN results ON results.report_id = reports.id " \
+            "WHERE md5=$hash OR sha1=$hash OR sha256=$hash OR samples.name like $hash"
     rows = self.db.query(query, vars={"hash":file_hash})
     return rows
 
   def search_samples(self, value):
     if value is None:
-      query = "SELECT samples.id,samples.name,samples.md5,samples.sha1,samples.sha256,samples.size,reports.id AS report_id,reports.infected,reports.date,reports.result FROM samples LEFT JOIN reports ON samples.id = reports.sample_id"
-      return self.db.query(query)
+      query = "SELECT samples.id,samples.name,samples.md5,samples.sha1,samples.sha256,samples.size,reports.id AS report_id,reports.infected,reports.date " \
+              "FROM samples " \
+              "LEFT JOIN reports ON samples.id = reports.sample_id "
+      rows = self.db.query(query).list()
     else:
-      query = "SELECT samples.id,samples.name,samples.md5,samples.sha1,samples.sha256,samples.size,reports.id AS report_id,reports.infected,reports.date,reports.result FROM samples LEFT JOIN reports ON samples.id = reports.sample_id WHERE md5=$val OR sha1=$val OR sha256=$val OR reports.result like $val OR samples.name like $val"
-      return self.db.query(query, vars={"val":value})
+      query = "SELECT samples.id,samples.name,samples.md5,samples.sha1,samples.sha256,samples.size,reports.id AS report_id,reports.infected,reports.date "\
+              "FROM samples " \
+              "LEFT JOIN reports ON samples.id = reports.sample_id " \
+              "WHERE md5=$val OR sha1=$val OR sha256=$val OR samples.name like $val"
+      rows = self.db.query(query, vars={"val":value}).list()
 
+    for row in rows:
+      row["result"] = self.search_results_by_report_id(row["report_id"])
+    return rows
+  
   def count_reports(self):
       query = "SELECT COUNT(*) FROM reports"
       return int(list(self.db.query(query))[0]["COUNT(*)"])
 
   def last_samples(self, limit, page):
     offset = limit * page
-    query = "SELECT samples.id,samples.name,samples.md5,samples.sha1,samples.sha256,samples.size,reports.id AS report_id,reports.infected,reports.date,reports.result FROM samples LEFT JOIN reports ON samples.id = reports.sample_id ORDER BY reports.id desc LIMIT $limit OFFSET $offset"
-    rows = self.db.query(query, vars={'limit': limit, 'offset': offset})
+    query = "SELECT samples.id,samples.name,samples.md5,samples.sha1,samples.sha256,samples.size,reports.id AS report_id,reports.infected,reports.date " \
+            "FROM samples "\
+            "LEFT JOIN reports ON samples.id = reports.sample_id " \
+            "ORDER BY reports.id desc " \
+            "LIMIT $limit " \
+            "OFFSET $offset"
+    rows = self.db.query(query, vars={'limit': limit, 'offset': offset}).list()
+    for row in rows:
+      row["result"] = self.search_results_by_report_id(row["report_id"])
     return rows
 
   def get_scanners(self):
@@ -135,7 +224,7 @@ class CDbSamples:
 
   def get_scanner(self, name):
     where = 'name like $name'
-    rows = self.db.select("scanners", where=where, vals={'name': name})
+    rows = self.db.select("scanners", where=where, vars={'name': name})
     return rows
 
   def insert_scanner(self, name, plugin_type, has_internet, signature_version, engine_version, speed):
@@ -151,7 +240,7 @@ class CDbSamples:
                             signature_version=str(signature_version), engine_version=str(engine_version))
       return row
     except Exception as e:
-      print("Exception update_scanner")
+      print("Exception insert_scanner")
       print(locals())
       print(e)
       return False
@@ -215,19 +304,20 @@ def convert_result_rows_to_ui_datastructure(rows):
           result[plugin_type] = {}
 
         # sort results by plugin_type
-        result_data = json.loads(scan_result['result'])
-        for plugin_name in result_data.keys():
+        for res in scan_result['result']:
+          res_obj = json.loads(res)
+
           # store result
-          plugin_type = PLUGIN_TYPE(result_data[plugin_name]["plugin_type"])
-          result[plugin_type][plugin_name] = result_data[plugin_name]
+          plugin_type = PLUGIN_TYPE(res_obj["plugin_type"])
+          result[plugin_type][res_obj["name"]] = res_obj
 
           if plugin_type == PLUGIN_TYPE.AV:
             # update statistics
-            has_error, error = result_has_error(result_data[plugin_name])
+            has_error, error = result_has_error(res_obj)
             if not has_error:
               result["statistics"]["engine_count"] += 1
 
-              if result_data[plugin_name]["infected"]:
+              if res_obj["infected"]:
                 result["statistics"]["engine_detected_count"] += 1
 
         if result["statistics"]["engine_count"] != 0:
@@ -486,7 +576,11 @@ class index:
     db_api = CDbSamples()
     db_scanners = db_api.get_scanners().list()
 
-    render = web.template.render(TEMPLATE_PATH, globals={"sorted": sorted, "plugin_type_to_string": plugin_type_to_string})
+    for scanner in db_scanners:
+      scanner["speed"] = AV_SPEED(int(scanner["speed"])).name.lower().capitalize()
+      scanner["plugin_type"] = PLUGIN_TYPE(int(scanner["plugin_type"])).name.lower().capitalize()
+
+    render = web.template.render(TEMPLATE_PATH, globals={"sorted": sorted})
     return render.index(db_scanners, cpu_count(), AV_SPEED)
 
 
@@ -496,6 +590,23 @@ class about:
     render = web.template.render(TEMPLATE_PATH)
     return render.about()
 
+
+# -----------------------------------------------------------------------
+class api_report:
+  def GET(self):
+    return self.POST()
+
+  def POST(self):
+    i = web.input(id="")
+    if i["id"] == "":
+      return '{"error": "report id not provided."}'
+    
+    db_api = CDbSamples()
+    result = db_api.search_report_by_id(i["id"])
+    if len(result) == 1:
+      return json.dumps(result[0])
+    else:
+      return json.dumps({"error": "report not found"})
 
 # -----------------------------------------------------------------------
 class api_search:
@@ -523,7 +634,7 @@ class api_search:
 # -----------------------------------------------------------------------
 class api_upload:
   def POST(self):
-    i = web.input(file_upload={}, minspeed="all", allow_internet="false")
+    i = web.input(file_upload={}, minspeed="-1", allow_internet="false")
     if "file_upload" not in i or i["file_upload"] is None or i["file_upload"] == "":
       return '{"error": "No file uploaded or invalid file."}'
 
@@ -533,7 +644,7 @@ class api_upload:
     av_min_speed = AV_SPEED(int(i["minspeed"]))
     av_allow_internet = i["allow_internet"] == "true"
 
-    # Setup the report
+    # Setup the report (the json response)
     report = {
         "hashes": {
           "md5": md5(buf).hexdigest(),
@@ -546,37 +657,91 @@ class api_upload:
         }
     }
 
-    # Scan the file
-    av = CMultiAV()
-    scan_results = av.scan_buffer(buf, av_min_speed, av_allow_internet)
-    print("webapi: scan complete")
-    report.update(scan_results)
-    print("webapi: update report dict complete")
-
-    # Persist result to db
+    # Persist report to db
     db_api = CDbSamples()
     print("webapi: starting insert")
-    report["id"] = db_api.insert_sample_report(filename, buf, scan_results)
+    report["id"] = db_api.create_sample_report(filename, buf)
     print("webapi: insert complete")
+  
+    # Function to call after a scan task is processed
+    def post_engine_scan_action(report_id, res):
+      res = json.loads(res)
+      scanner_name = res["name"]
 
-    # Update scanner db
-    print("webapi: starting scanner db update")
-    for scanner_name in scan_results:
-      if "error" in scan_results[scanner_name]:
-        continue
+      print("webapi: updateing result from scanner {0}".format(scanner_name))
+      db_api.update_scan_result(report_id, res)
+      print("webapi: updated result from {0}".format(scanner_name))
       
-      signature_version = scan_results[scanner_name]["updated"] if "updated" in scan_results[scanner_name] else "-"
-      engine_version = scan_results[scanner_name]["engine"] if "engine" in scan_results[scanner_name] else "-"
-      plugin_type = scan_results[scanner_name]["plugin_type"]
-      has_internet = scan_results[scanner_name]["has_internet"]
-      speed = scan_results[scanner_name]["speed"]
+      # Update scanner db
+      if "error" in res:
+        return
+      
+      signature_version = res["updated"] if "updated" in res else "-"
+      engine_version = res["engine"] if "engine" in res else "-"
+      plugin_type = res["plugin_type"]
+      has_internet = res["has_internet"]
+      speed = res["speed"]
 
+      print("webapi: updating scanner data for {0}".format(scanner_name))
       db_api.update_scanner(scanner_name, plugin_type, has_internet, signature_version, engine_version, speed)
+      print("webapi: scanner db update for {0} complete".format(scanner_name))
+    
+    def post_scan_action(report_id, res):
+      print("webapi: finishing scan report {0}".format(report_id))
+      db_api.finish_sample_report(report["id"])
+      print("webapi: Scan report for {0} finished".format(report_id))
+    
+    def pre_scan_action(report_id, engine, filename):
+      print("webapi: scanning file of report {0} with engine {1}...!".format(report_id, engine.name))
+      db_api.update_scan_result(report_id, {
+        'engine': '',
+        'updated': '',
+        'name': engine.name,
+        'has_internet': engine.container_requires_internet,
+        'infected': '',
+        'result': '',
+        'scanning': True,
+        'speed': engine.speed.value,
+        'plugin_type': engine.plugin_type.value
+      })
+    
 
-    print("webapi: scanner db update complete")
+    # Queue the file scan
+    scan_promise = CAV.scan_buffer(
+      buf,
+      av_min_speed, 
+      av_allow_internet, 
+      {"pre": [lambda engine, filename: pre_scan_action(report["id"], engine, filename)]})
+    
+    scan_promise.engine_then(
+      lambda res: post_engine_scan_action(report["id"], res),
+      lambda res: post_engine_scan_action(report["id"], res)
+    )
+    scan_promise.then(
+      lambda res: post_scan_action(report["id"], res),
+      lambda res: post_scan_action(report["id"], res)
+    )
+
+    print("webapi: scan queued")
+
+    # Create initial scan reports in db
+    for engine, engine_promise in scan_promise.engine_promises.items():
+      initial_scan_report = {
+        'engine': '',
+        'updated': '',
+        'name': engine.name,
+        'has_internet': engine.container_requires_internet,
+        'infected': '',
+        'result': '',
+        'queued': True,
+        'speed': engine.speed.value,
+        'plugin_type': engine.plugin_type.value
+      }
+      db_api.add_scan_result(report["id"], initial_scan_report)
     return json.dumps(report, cls=EnumEncoder)
 
 # -----------------------------------------------------------------------
+# Legacy non js upload via web form
 class upload:
   def POST(self):
     render = web.template.render(TEMPLATE_PATH)
@@ -589,8 +754,7 @@ class upload:
     filename = i["file_upload"].filename
 
     # Scan the file
-    av = CMultiAV()
-    scan_results = av.scan_buffer(buf)
+    scan_results = CAV.scan_buffer(buf)
 
     # Calculate the hashes
     hashes = {
@@ -607,7 +771,7 @@ class upload:
 
     # Persist results to db
     db_api = CDbSamples()
-    report_id = db_api.insert_sample_report(filename, buf, scan_results)
+    report_id = db_api.create_sample_report(filename, buf)
 
     # Update scanner db
     for scanner_name in scan_results:
@@ -623,25 +787,68 @@ class upload:
     return render.results(report_id, scan_results, hashes, file_properties)
 
 # -----------------------------------------------------------------------
+update_results = {
+  "start_date": None,
+  "end_date": None,
+  "last_refresh": None,
+  "results": dict()
+}
 class update:
+  def GET(self):
+    # show results
+    render = web.template.render(TEMPLATE_PATH, globals={"sorted": sorted, "plugin_type_to_string": plugin_type_to_string})
+    update_results['last_refresh'] = datetime.datetime.now()
+    return render.update(update_results)
+
+  def _post_engine_update(self, res):
+    result = json.loads(res)
+    print("update of {0} complete!".format(result['engine']))
+
+    # store to temp object
+    update_results['results'][result['engine']] = result
+
+    # update db if required
+    update_successs = result['status'] != "error"      
+    if update_successs:
+      db_api = CDbSamples()
+      plugin_type = result["plugin_type"]
+      has_internet = result["has_inernet"]
+      signature_version = result["signature_version"]
+      speed = result["speed"]
+
+      db_api.update_scanner(result['engine'], plugin_type, has_internet, signature_version, speed)
+
+  def _post_update(self, result):
+    update_results['end_date'] = datetime.datetime.now()
+    print("update process finished")
+
   def POST(self):
     # Update
-    av = CMultiAV()
-    update_results = av.update()
+    update_results['start_date'] = datetime.datetime.now()
+    print("starting update of all containers...")
+    update_promise = CAV.update()
 
-    # Update DB with new versions    
-    db_api = CDbSamples()
-    for scanner in update_results:
-      update_successs = update_results[scanner]['status'] != "error"
-      
-      if update_successs:
-        plugin_type = update_results[scanner]["plugin_type"]
-        has_internet = update_results[scanner]["has_inernet"]
-        signature_version = update_results[scanner]["signature_version"]
-        speed = update_results[scanner]["speed"]
+    # update temp data structure with results
+    update_promise.engine_then(
+      lambda res: self._post_engine_update(res),
+      lambda res: self._post_engine_update(res)
+    ).then(
+      lambda res: self._post_update(res),
+      lambda res: self._post_update(res)
+    )
 
-        db_api.update_scanner(scanner, plugin_type, has_internet, signature_version, speed)
+    # set initial data in temp data structure
+    for engine, promise in update_promise.engine_promises.items():
+      update_results["results"][engine.name] = {
+          'engine': engine.name,
+          'status': "updating...",
+          'old_signature_version': "...",
+          'old_container_build_time': "...",
+          'signature_version': "...",
+          'container_build_time': "...",
+          'plugin_type': engine.plugin_type,
+          'has_internet': engine.container_requires_internet,
+          'speed': engine.speed
+      }
 
-    # Show the results
-    render = web.template.render(TEMPLATE_PATH, globals={"sorted": sorted, "plugin_type_to_string": plugin_type_to_string})
-    return render.update(update_results)
+    return self.GET()

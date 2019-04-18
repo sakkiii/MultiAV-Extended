@@ -62,25 +62,23 @@ import os
 import re
 import codecs
 import time
-import ConfigParser
 import xml.etree.ElementTree
 import requests
 import json
 import random
 
-from rwlock import RWLock
 from enum import Enum
 from hashlib import sha1
 from tempfile import NamedTemporaryFile
-from subprocess import check_output, CalledProcessError, call, STDOUT
+from subprocess import check_output, CalledProcessError, call, STDOUT, Popen, PIPE
 from multiprocessing import Process, Queue, cpu_count
 from datetime import datetime
+from promise import Promise
 
-try:
-    import pyclamd
-    has_clamd = True
-except ImportError:
-    has_clamd = False
+from multiav.enumencoder import EnumEncoder
+from multiav.multiactionpromise import MultiActionPromise
+from multiav.safeconfigparserextended import SafeConfigParserExtended
+from multiav.scannerstrategy import ScannerStrategy
 
 # -----------------------------------------------------------------------
 class OrderedEnum(Enum):
@@ -100,15 +98,8 @@ class OrderedEnum(Enum):
     if self.__class__ is other.__class__:
       return self.value < other.value
     return NotImplemented
-    
-class EnumEncoder(json.JSONEncoder):
-  def default(self, obj):
-    if isinstance(obj, Enum):
-        return obj.value
-    return json.JSONEncoder.default(self, obj)
 
 class AV_SPEED(OrderedEnum):
-  __order__ = 'ALL ULTRA FAST MEDIUM SLOW'
   ALL = 3  # Run only when all engines must be executed
   SLOW = 2
   MEDIUM = 1
@@ -122,9 +113,6 @@ class PLUGIN_TYPE(OrderedEnum):
   INTEL = 3
   FILE_FORMATS = 4
 
-DOCKER_NETWORK_NO_INTERNET_NAME = "multiav-no-internet-bridge"
-DOCKER_NETWORK_INTERNET_NAME = "multiav-internet-bridge"
-
 #-----------------------------------------------------------------------
 class CDockerAvScanner():
   def __init__(self, cfg_parser, name):
@@ -137,21 +125,21 @@ class CDockerAvScanner():
     self.plugin_id = cfg_parser.get(self.name, "PLUGIN_ID")
     self.docker_network_no_internet = self.cfg_parser.get("MULTIAV", "DOCKER_NETWORK_NO_INTERNET").split(".") #[10,192,212,0]
     self.docker_network_internet = self.cfg_parser.get("MULTIAV", "DOCKER_NETWORK_INTERNET").split(".") #[10,168,137,0]
+    self.container = None
     self.container_api_endpoint = "scan"
     self.container_api_sample_parameter_name = "malware"
-    self.container_requires_internet = int(self.get_config_value(self.name, "ENABLE_INTERNET_ACCESS", 0)) == 1
+    self.container_requires_internet = int(self.cfg_parser.gets(self.name, "ENABLE_INTERNET_ACCESS", 0)) == 1
     self.container_api_host = self.get_api_host()
     self.container_api_port = 3993
-    self.container_build_url_override = self.get_config_value(self.name, "DOCKER_BUILD_URL_OVERRIDE", None)
+    self.container_build_url_override = self.cfg_parser.gets(self.name, "DOCKER_BUILD_URL_OVERRIDE", None)
     self.container_run_command_arguments = dict()
     self.container_run_docker_parameters = dict()
     self.container_build_params = dict()
+    self.update_pull_supported = True
+    self.update_command_supported = True
+    self.binary_path = "/bin/avscan"
+    self.container_additional_files = []
   
-  def get_config_value(self, name, variable, default):
-    if self.cfg_parser.has_option(name, variable):
-      return self.cfg_parser.get(self.name, variable)
-    return default
-
   def is_disabled(self):
     try:
       self.cfg_parser.get(self.name, "DISABLED")
@@ -170,260 +158,60 @@ class CDockerAvScanner():
     ip.append(self.plugin_id)
     
     return ".".join(ip)
-
-  def is_container_running(self):
-    cmd = "docker ps --filter status=running"
-    output = str(check_output(cmd.split(" ")))
-    return "malice/" + self.container_name in output
-
-  def is_container_created(self):
-    cmd = "docker ps -a"
-    output = str(check_output(cmd.split(" ")))
-    return "malice/" + self.container_name in output
-
-  def get_container_tag(self):
-    cmd = "docker images malice/{0}:updated".format(self.container_name)
-    output = str(check_output(cmd.split(" ")))
-
-    return "updated" if self.container_name in output else "latest"
-
-  def start_container(self):
-    tag = self.get_container_tag()
-
-    network_name = DOCKER_NETWORK_INTERNET_NAME if self.container_requires_internet else DOCKER_NETWORK_NO_INTERNET_NAME
-    cmd = "docker run -d --name {0} --net {3} --ip {1}$DOCKERPARAMS$ --rm malice/{0}:{2}$CMDARGS$ web".format(self.container_name, self.container_api_host, tag, network_name)
-
-    # set docker parameters
-    if len(self.container_run_docker_parameters) == 0:
-      cmd = cmd.replace("$DOCKERPARAMS$", "")
-    else:
-      cmd = cmd.replace("$DOCKERPARAMS$", " " + " ".join(
-        map(lambda kv: kv[0] + "=" + kv[1], self.container_run_docker_parameters.items())))
-        
-    # set command arguments
-    if len(self.container_run_command_arguments) == 0:
-      cmd = cmd.replace("$CMDARGS$", "")
-    else:
-      cmd = cmd.replace("$CMDARGS$", " " + " ".join(map(lambda kv: kv[0] + "=" + kv[1], self.container_run_command_arguments.items())))
     
-    # start
-    try:
-      check_output(cmd.split(" "))
-    except Exception as e:
-      print(cmd)
-      print(e)
-      return False
-
-    # give the container a sec to start
-    time.sleep(1)
-
-    return self.is_container_running()
-  
-  def stop_container(self):
-    cmd = "docker stop {0}".format(self.container_name)
-    output = str(check_output(cmd.split(" ")))
-    return self.container_name in output
-  
-  def restart_container(self):
-    if self.stop_container():
-      return self.start_container()
-    return False
-
-  def remove_container(self):
-    cmd = "docker rm {0}".format(self.container_name)
-    output = str(check_output(cmd.split(" ")))
-
-    return self.container_name in output
-
-  def is_container_pulled(self):
-    #latest must always exist
-    cmd = "docker images malice/{0}:latest".format(self.container_name)
-    output = str(check_output(cmd.split(" ")))
-    
-    return self.container_name in output
-
-  def pull_container(self):
-    if self.is_container_pulled():
-      return True
-
-    if self.container_build_url_override != None or len(self.container_build_params) != 0:
-      container_url = ""
-      if self.container_build_url_override:
-        container_url = self.container_build_url_override
-      else:
-        container_url = "https://github.com/malice-plugins/{0}.git".format(self.container_name)
-      
-      print("building docker container malice/{0} from url: {1}".format(self.container_name, container_url))
-      cmd = "docker build --tag malice/{0}:latest$BUILDARGS$ {1}".format(self.container_name, container_url)
-
-      # set build params (e.g license keys)
-      if len(self.container_build_params) == 0:
-        cmd = cmd.replace("$BUILDARGS$", "")
-      else:
-        cmd = cmd.replace("$BUILDARGS$", "".join(map(lambda kv: " --build-arg " + kv[0] + "=" + kv[1], self.container_build_params.items())))
-
-      output = str(check_output(cmd.split(" ")))
-
-      if not "Successfully built" in output:
-        print(output)
-        return False
-
-      print("Built container for plugin {0} successfully!".format(self.container_name))
-
-    else:
-      print("pulling docker container malice/{0}".format(self.container_name))
-      cmd = "docker pull malice/" + self.container_name
-
-      output = str(check_output(cmd.split(" ")))
-
-      if not "Status: Downloaded newer image" in output:
-        print(output)
-        return False
-
-      print("Pulled container for plugin {0} successfully!".format(self.container_name))
-    
-    return True
-  
-  def store_results(self, response_obj):
-    if self.plugin_type == PLUGIN_TYPE.AV:
-      self.results = response_obj[response_obj.keys()[0]]
-    elif self.plugin_type == PLUGIN_TYPE.METADATA or self.plugin_type == PLUGIN_TYPE.FILE_FORMATS:
-      self.results = response_obj
-    elif self.plugin_type == PLUGIN_TYPE.INTEL:
-      if len(response_obj.keys()) == 1:
-        self.results = response_obj[response_obj.keys()[0]]
-      else:
-        self.results = response_obj
-
   def scan(self, path):
-    retry_counter = 0
-    while retry_counter < 3:
-      try:
-        if not self.is_container_running():
-          if not self.is_container_pulled():
-            print("docker image for malice plugin {0} not pulled! use docker pull malice/{0} to set it up or set auto_pull=True!".format(self.container_name))
-            return False
-          
-          self.start_container()
-          time.sleep(5)
-
+    try:
         # build request params
-        url = "http://{0}:{1}/{2}".format(self.container_api_host, self.container_api_port, self.container_api_endpoint)
         filename = os.path.basename(path)
         
-        files = {
-          self.container_api_sample_parameter_name: (filename, open(path, 'rb'))
-          }
-
-        # post
+        # measure scan time
         start_time = time.time()
-        response = requests.post(url, files=files, timeout=120)
-        print("[{0}] Scan time: {1}s seconds".format(self.name, (time.time() - start_time)))
-        response_obj = json.loads(response.text)
-        
-        # store
-        self.store_results(response_obj)
-        
-        return True
 
-      except Exception as e:
-        retry_counter += 1
-        self.results = { 
-          "error": "{0}".format(e),
-          "infected": False,
-          "engine": "-",
-          "updated": "-",
-          "has_internet": self.container_requires_internet,
-          "speed": self.speed.name
+        # copy file to container
+        cmd = "docker cp {0} {1}:/malware/{2}".format(path, self.container.id, filename)
+        output = self.container.machine.execute_command(cmd)
+        if "Error:" in output:
+          raise Exception("Could not copy file to target container")
+        
+        # scan
+        cmd = "docker exec {0} {2} --timeout 120 {1}".format(self.container.id, filename, self.binary_path)
+        response = self.container.machine.execute_command(cmd)
+        #print("[{0}] Scan response raw: {1}".format(self.name, response))
+        scan_time = time.time() - start_time
+        print("[{0}] Scan time: {1}s seconds".format(self.name, scan_time))
+        
+        # cleanup
+        if self.container.max_scans_per_container != 1:
+          cmd = "docker exec {0} rm /malware/{1}".format(self.container.id, filename)
+          output = self.container.machine.execute_command(cmd)
+          if "rm:" in output:
+            print("Could not cleanup file {0} from target container {1} on machine {2}".format("/malware/" + filename, self.container.id, self.container.machine.id))
+
+        # deserialize result
+        response_obj = json.loads(response)
+        return self._normalize_results(response_obj)
+    except Exception as e:
+        print("[{0}] Container: {2} Exception in scan method: {1}".format(self.name, e, self.container.id))
+        print(response)
+        return { 
+            "error": "{0}".format(e),
+            "infected": False,
+            "engine": "-",
+            "updated": "-",
+            "has_internet": self.container_requires_internet,
+            "speed": self.speed.name
         }
-        print("[{0}] Exception in scan method".format(self.name))
-        print(e)
-      
-      print("[{0}] Error while scanning the file. retrying now (counter {1})...".format(self.container_name, retry_counter))
-      #time.sleep(random.randint(2,25))
 
-    return False
-
-  def update(self):
-    # stop container
-    if self.is_container_running():
-      print("[{0}] is running. Stopping now...".format(self.container_name))
-      self.stop_container()
-
-      # give docker some time to stop the container
-      time.sleep(5)
-
-    
-    if not self.is_container_pulled():
-      print("[{0}] Update failed. Container not pulled!".format(self.container_name))
-      return "error"
-    
-    # Check for docker image update on the store
-    #try:
-    #  cmd = "docker pull malice/{0}".format(self.container_name)
-    #  output = check_output(cmd.split(" "))
-    #except Exception as e:
-    #  self.start_container()
-    #  return False
-
-    # cleanup old update image if existing
-    try:
-      cmd = "docker images malice/{0}:updated".format(self.container_name)
-      output = str(check_output(cmd.split(" ")))
-
-      if self.container_name in output:
-        print("[{0}] cleanup old updated container".format(self.container_name))
-        cmd = "docker rmi malice/{0}:updated".format(self.container_name)
-        output = str(check_output(cmd.split(" ")))
-    except Exception as e:
-      print("[{0}] {1}".format(self.container_name, e))
-      self.start_container()
-      return "error"
-    
-    # run new container to do the update
-    try:
-      cmd = "docker run --name {0} malice/{0}:latest update".format(self.container_name)
-      output = str(check_output(cmd.split(" ")))
-    except Exception as e:
-      print("[{0}] {1}".format(self.container_name, e))
-      self.start_container()
-      return "error"
-    
-
-    # save updated container as new image with tag updated
-    try:
-      cmd = "docker commit {0} malice/{0}:updated".format(self.container_name)
-      output = str(check_output(cmd.split(" ")))
-    except Exception as e:
-      print("[{0}] {1}".format(self.container_name, e))
-      self.remove_container()
-      self.start_container()
-      return "error"
-    
-    # remove the container used for updating
-    if not self.remove_container():
-      print("[{0}] {1}".format(self.container_name, "could not remove the updated container"))
-      self.start_container()
-      return "error"
-
-
-    # start the updated container
-    if not self.start_container():
-      print("[{0}] could not start container {0}".format(self.container_name))
-      return "error"
-
-    return "success"
-
-  def get_signature_version(self):
-    try:
-      # 2>/dev/null => hide possible error messages if the update file doesnt exist
-      cmd = "docker exec {0} cat /opt/malice/UPDATED".format(self.container_name)
-      FNULL = open(os.devnull, 'w')
-      output = str(check_output(cmd.split(" "), stderr=FNULL))
-    except:
-      output = "-"
-    
-    return output
+  def _normalize_results(self, response_obj):
+    if self.plugin_type == PLUGIN_TYPE.AV:
+      return response_obj[response_obj.keys()[0]]
+    elif self.plugin_type == PLUGIN_TYPE.METADATA or self.plugin_type == PLUGIN_TYPE.FILE_FORMATS:
+      return response_obj
+    elif self.plugin_type == PLUGIN_TYPE.INTEL:
+      if len(response_obj.keys()) == 1:
+        return response_obj[response_obj.keys()[0]]
+      else:
+        return response_obj
 
 #-----------------------------------------------------------------------
 class CDockerHashLookupService(CDockerAvScanner):
@@ -431,82 +219,71 @@ class CDockerHashLookupService(CDockerAvScanner):
     CDockerAvScanner.__init__(self, cfg_parser, name)
   
   def scan(self, path):
-    retry = 0
-    while retry <= 1:
-      try:
-        if not self.is_container_running():
-          if not self.is_container_pulled():
-            print("docker image for malice plugin {0} not pulled! use docker pull malice/{0} to set it up!".format(self.container_name))
-            return False
-          
-          self.start_container()
-          time.sleep(5)
+    try:
+      with open(path, "rb") as binary_file:
+        # Read the whole file at once
+        buf = binary_file.read()
 
-        with open(path, "rb") as binary_file:
-          # Read the whole file at once
-          buf = binary_file.read()
+      # calculate hash
+      filehash = sha1(buf).hexdigest()
 
-        # build request params
-        url = "http://{0}:{1}/{2}/{3}".format(self.container_api_host, self.container_api_port, self.container_api_endpoint, sha1(buf).hexdigest())
+      # scan
+      start_time = time.time()      
+      cmd = "docker exec {0} {1} lookup {2}".format(self.container.id, self.binary_path, filehash)
+      response = self.container.machine.execute_command(cmd)
+      print("[{0}] Scan time: {1}s seconds".format(self.name, (time.time() - start_time)))
 
-        # post
-        start_time = time.time()
-        response = requests.get(url, timeout=120)
-        print("[{0}] Scan time: {1}s seconds".format(self.name, (time.time() - start_time)))
-        response_obj = json.loads(response.text)
+      # deserialize
+      response_obj = json.loads(response)
+      return self._normalize_results(response_obj)
 
-        # store
-        self.store_results(response_obj)
-        
-        return True
-
-      except Exception as e:
-        print(e)
-        self.results = { "exception": e }
-        retry += 1
-        self.restart_container()
-        time.sleep(10)
-  
-    return False
+    except Exception as e:
+      print("[{0}] Container: {2} Exception in scan method: {1}".format(self.name, e, self.container.id))
+      print(response)
+      return { 
+          "error": "{0}".format(e),
+          "infected": False,
+          "engine": "-",
+          "updated": "-",
+          "has_internet": self.container_requires_internet,
+          "speed": self.speed.name
+      }
 
 #-----------------------------------------------------------------------
 class CFileInfo(CDockerAvScanner):
   def __init__(self, cfg_parser):
-    CDockerAvScanner.__init__(self, cfg_parser, "FileInfoMalice")
+    CDockerAvScanner.__init__(self, cfg_parser, "FileInfo")
     self.speed = AV_SPEED.ULTRA
     self.plugin_type = PLUGIN_TYPE.METADATA
     self.container_name = "fileinfo"
-  
-  def update(self):
-    return "not supported"
+    self.binary_path = "/bin/info"
+    self.update_command_supported = False
 
 #-----------------------------------------------------------------------
 class CPEScanMalicePlugin(CDockerAvScanner):
   def __init__(self, cfg_parser):
-    CDockerAvScanner.__init__(self, cfg_parser, "PEScanMalice")
+    CDockerAvScanner.__init__(self, cfg_parser, "PEScan")
     self.speed = AV_SPEED.FAST
     self.plugin_type = PLUGIN_TYPE.FILE_FORMATS
     self.container_name = "pescan"
-
-  def update(self):
-    return "not supported"
+    self.binary_path = "/usr/sbin/pescan scan"
+    self.update_command_supported = False
 
 #-----------------------------------------------------------------------
 class CFlossMalicePlugin(CDockerAvScanner):
   def __init__(self, cfg_parser):
-    CDockerAvScanner.__init__(self, cfg_parser, "FlossMalice")
+    CDockerAvScanner.__init__(self, cfg_parser, "Floss")
     self.speed = AV_SPEED.SLOW
     self.plugin_type = PLUGIN_TYPE.FILE_FORMATS
     self.container_name = "floss"
-
-  def update(self):
-    return "not supported"
+    self.binary_path = "/bin/flscan"
+    self.update_command_supported = False
 
 #-----------------------------------------------------------------------
 # Update and download servers not reachable anymore :/
 '''class CZonerMalicePlugin(CDockerAvScanner):
   def __init__(self, cfg_parser):
-    CDockerAvScanner.__init__(self, cfg_parser, "ZonerMalice")
+    CDockerAvScanner.__init__(self, cfg_parser, "Zoner")
     self.speed = AV_SPEED.FAST
     self.plugin_type = PLUGIN_TYPE.AV
     self.container_name = "zoner"
@@ -517,16 +294,18 @@ class CFlossMalicePlugin(CDockerAvScanner):
 #-----------------------------------------------------------------------
 class CWindowsDefenderMalicePlugin(CDockerAvScanner):
   def __init__(self, cfg_parser):
-    CDockerAvScanner.__init__(self, cfg_parser, "WindowsDefenderMalice")
+    CDockerAvScanner.__init__(self, cfg_parser, "WindowsDefender")
     self.speed = AV_SPEED.FAST
     self.plugin_type = PLUGIN_TYPE.AV
     self.container_name = "windows-defender"
     self.container_run_docker_parameters["--security-opt"] = "seccomp=seccomp.json"
+    self.update_command_supported = False # temp disable as update seems to break av => segfault on scan
+    self.container_additional_files = ["seccomp.json"]
 
 #-----------------------------------------------------------------------
 class CSophosMalicePlugin(CDockerAvScanner):
   def __init__(self, cfg_parser):
-    CDockerAvScanner.__init__(self, cfg_parser, "SophosMalice")
+    CDockerAvScanner.__init__(self, cfg_parser, "Sophos")
     self.speed = AV_SPEED.SLOW
     self.plugin_type = PLUGIN_TYPE.AV
     self.container_name = "sophos"
@@ -534,18 +313,16 @@ class CSophosMalicePlugin(CDockerAvScanner):
 #-----------------------------------------------------------------------
 class CAvastMalicePlugin(CDockerAvScanner):
   def __init__(self, cfg_parser):
-    CDockerAvScanner.__init__(self, cfg_parser, "AvastMalice")
+    CDockerAvScanner.__init__(self, cfg_parser, "Avast")
     self.speed = AV_SPEED.FAST
     self.plugin_type = PLUGIN_TYPE.AV
     self.container_name = "avast"
-
-  def update(self):
-    return "skipped"
+    self.update_command_supported = False
 
 #-----------------------------------------------------------------------
 class CAvgMalicePlugin(CDockerAvScanner):
   def __init__(self, cfg_parser):
-    CDockerAvScanner.__init__(self, cfg_parser, "AvgMalice")
+    CDockerAvScanner.__init__(self, cfg_parser, "Avg")
     self.speed = AV_SPEED.ULTRA
     self.plugin_type = PLUGIN_TYPE.AV
     self.container_name = "avg"
@@ -553,7 +330,7 @@ class CAvgMalicePlugin(CDockerAvScanner):
 #-----------------------------------------------------------------------
 class CBitDefenderMalicePlugin(CDockerAvScanner):
   def __init__(self, cfg_parser):
-    CDockerAvScanner.__init__(self, cfg_parser, "BitDefenderMalice")
+    CDockerAvScanner.__init__(self, cfg_parser, "BitDefender")
     self.speed = AV_SPEED.MEDIUM
     self.plugin_type = PLUGIN_TYPE.AV
     self.container_name = "bitdefender"
@@ -562,7 +339,7 @@ class CBitDefenderMalicePlugin(CDockerAvScanner):
 #-----------------------------------------------------------------------
 class CClamAVMalicePlugin(CDockerAvScanner):
   def __init__(self, cfg_parser):
-    CDockerAvScanner.__init__(self, cfg_parser, "ClamAVMalice")
+    CDockerAvScanner.__init__(self, cfg_parser, "ClamAV")
     self.speed = AV_SPEED.ULTRA
     self.plugin_type = PLUGIN_TYPE.AV
     self.container_name = "clamav"
@@ -570,7 +347,7 @@ class CClamAVMalicePlugin(CDockerAvScanner):
 #-----------------------------------------------------------------------
 class CComodoMalicePlugin(CDockerAvScanner):
   def __init__(self, cfg_parser):
-    CDockerAvScanner.__init__(self, cfg_parser, "ComodoMalice")
+    CDockerAvScanner.__init__(self, cfg_parser, "Comodo")
     self.speed = AV_SPEED.FAST
     self.plugin_type = PLUGIN_TYPE.AV
     self.container_name = "comodo"
@@ -578,7 +355,7 @@ class CComodoMalicePlugin(CDockerAvScanner):
 #-----------------------------------------------------------------------
 class CDrWebMalicePlugin(CDockerAvScanner):
   def __init__(self, cfg_parser):
-    CDockerAvScanner.__init__(self, cfg_parser, "DrWebMalice")
+    CDockerAvScanner.__init__(self, cfg_parser, "DrWeb")
     self.speed = AV_SPEED.SLOW
     self.plugin_type = PLUGIN_TYPE.AV
     self.container_name = "drweb"
@@ -586,7 +363,7 @@ class CDrWebMalicePlugin(CDockerAvScanner):
 #-----------------------------------------------------------------------
 class CEScanMalicePlugin(CDockerAvScanner):
   def __init__(self, cfg_parser):
-    CDockerAvScanner.__init__(self, cfg_parser, "EScanMalice")
+    CDockerAvScanner.__init__(self, cfg_parser, "EScan")
     self.speed = AV_SPEED.FAST
     self.plugin_type = PLUGIN_TYPE.AV
     self.container_name = "escan"
@@ -594,7 +371,7 @@ class CEScanMalicePlugin(CDockerAvScanner):
 #-----------------------------------------------------------------------
 class CFProtMalicePlugin(CDockerAvScanner):
   def __init__(self, cfg_parser):
-    CDockerAvScanner.__init__(self, cfg_parser, "FProtMalice")
+    CDockerAvScanner.__init__(self, cfg_parser, "FProt")
     self.speed = AV_SPEED.FAST
     self.plugin_type = PLUGIN_TYPE.AV
     self.container_name = "fprot"
@@ -602,7 +379,7 @@ class CFProtMalicePlugin(CDockerAvScanner):
 #-----------------------------------------------------------------------
 class CFSecureMalicePlugin(CDockerAvScanner):
   def __init__(self, cfg_parser):
-    CDockerAvScanner.__init__(self, cfg_parser, "FSecureMalice")
+    CDockerAvScanner.__init__(self, cfg_parser, "FSecure")
     self.speed = AV_SPEED.MEDIUM
     self.plugin_type = PLUGIN_TYPE.AV
     self.container_name = "fsecure"
@@ -610,7 +387,7 @@ class CFSecureMalicePlugin(CDockerAvScanner):
 #-----------------------------------------------------------------------
 class CKasperskyMalicePlugin(CDockerAvScanner):
   def __init__(self, cfg_parser):
-    CDockerAvScanner.__init__(self, cfg_parser, "KasperskyMalice")
+    CDockerAvScanner.__init__(self, cfg_parser, "Kaspersky")
     self.speed = AV_SPEED.FAST
     self.plugin_type = PLUGIN_TYPE.AV
     self.container_name = "kaspersky"
@@ -618,7 +395,7 @@ class CKasperskyMalicePlugin(CDockerAvScanner):
 #-----------------------------------------------------------------------
 class CMcAfeeMalicePlugin(CDockerAvScanner):
   def __init__(self, cfg_parser):
-    CDockerAvScanner.__init__(self, cfg_parser, "McAfeeMalice")
+    CDockerAvScanner.__init__(self, cfg_parser, "McAfee")
     self.speed = AV_SPEED.FAST
     self.plugin_type = PLUGIN_TYPE.AV
     self.container_name = "mcafee"
@@ -626,110 +403,88 @@ class CMcAfeeMalicePlugin(CDockerAvScanner):
 #-----------------------------------------------------------------------
 class CYaraMalicePlugin(CDockerAvScanner):
   def __init__(self, cfg_parser):
-    CDockerAvScanner.__init__(self, cfg_parser, "YaraMalice")
+    CDockerAvScanner.__init__(self, cfg_parser, "Yara")
     self.speed = AV_SPEED.MEDIUM
     self.plugin_type = PLUGIN_TYPE.METADATA
     self.container_name = "yara"
-
-  def update(self):
-    return "not supported"
+    self.binary_path = "/bin/scan"
+    self.update_command_supported = False
 
 #-----------------------------------------------------------------------
 class CShadowServerMalicePlugin(CDockerHashLookupService):
   def __init__(self, cfg_parser):
-    CDockerHashLookupService.__init__(self, cfg_parser, "ShadowServerMalice")
+    CDockerHashLookupService.__init__(self, cfg_parser, "ShadowServer")
     self.speed = AV_SPEED.FAST
     self.plugin_type = PLUGIN_TYPE.INTEL
     self.container_name = "shadow-server"
     self.container_api_endpoint = "lookup"
-
-  def update(self):
-    return "not supported"
+    self.binary_path = "/bin/shadow-server"
+    self.update_command_supported = False
 
 #-----------------------------------------------------------------------
 class CVirusTotalMalicePlugin(CDockerHashLookupService):
   def __init__(self, cfg_parser):
-    CDockerHashLookupService.__init__(self, cfg_parser, "VirusTotalMalice")
+    CDockerHashLookupService.__init__(self, cfg_parser, "VirusTotal")
     self.speed = AV_SPEED.FAST
     self.plugin_type = PLUGIN_TYPE.INTEL
     self.container_name = "virustotal"
     self.container_api_endpoint = "lookup"
     self.container_run_command_arguments["--api"] = cfg_parser.get(self.name, "API_KEY")
-    
-  def update(self):
-    return "not supported"
+    self.binary_path = "/bin/virustotal"
+    self.update_command_supported = False
 
 #-----------------------------------------------------------------------
 class CNationalSoftwareReferenceLibraryMalicePlugin(CDockerHashLookupService):
   def __init__(self, cfg_parser):
-    CDockerHashLookupService.__init__(self, cfg_parser, "NationalSoftwareReferenceLibraryMalice")
+    CDockerHashLookupService.__init__(self, cfg_parser, "NSRL")
     self.speed = AV_SPEED.FAST
     self.plugin_type = PLUGIN_TYPE.INTEL
     self.container_name = "nsrl"
     self.container_api_endpoint = "lookup"
-    
-  def update(self):
-    return "not supported"
+    self.binary_path = "/bin/nsrl"
+    self.update_command_supported = False
 
 #-----------------------------------------------------------------------
-class PullPluginException(Exception):
-  pass
+class CIkarusMalicePlugin(CDockerAvScanner):
+  def __init__(self, cfg_parser):
+    CDockerAvScanner.__init__(self, cfg_parser, "Ikarus")
+    self.speed = AV_SPEED.FAST
+    self.plugin_type = PLUGIN_TYPE.AV
+    self.container_name = "ikarus"
+    self.container_run_docker_parameters["--shm-size"] = "256m" # default is 64m. Bus error on scan if omitted
+    self.update_pull_supported = False
 
 #-----------------------------------------------------------------------
-class StartPluginException(Exception):
-  pass
-
-#-----------------------------------------------------------------------
-class CreateNetworkException(Exception):
+class InvalidScannerStrategyException(Exception):
   pass
 
 # -----------------------------------------------------------------------
 class CMultiAV:
-  def __init__(self, cfg = "config.cfg", auto_pull = False, start_containers = False):
+  def __init__(self, scanner_strategy, cfg = "config.cfg", auto_pull = False, auto_start = False):
     self.engines = [CFileInfo, CWindowsDefenderMalicePlugin,
                     CSophosMalicePlugin, CAvastMalicePlugin, CAvgMalicePlugin,
                     CBitDefenderMalicePlugin, CClamAVMalicePlugin, CComodoMalicePlugin,
                     CDrWebMalicePlugin, CEScanMalicePlugin, CFProtMalicePlugin,
                     CFSecureMalicePlugin, CKasperskyMalicePlugin, CMcAfeeMalicePlugin,
                     CYaraMalicePlugin, CShadowServerMalicePlugin, CVirusTotalMalicePlugin,
-                    CNationalSoftwareReferenceLibraryMalicePlugin, CPEScanMalicePlugin, CFlossMalicePlugin]
+                    CNationalSoftwareReferenceLibraryMalicePlugin, CPEScanMalicePlugin, 
+                    CFlossMalicePlugin, CIkarusMalicePlugin]
 
     self.processes = cpu_count()
     self.cfg = cfg
     self.read_config()
-    self.updateMutex = RWLock()
 
-    # startup checks, disabled per default
-    if auto_pull:
-      print("Checking if all plugins are pulled and pulling them if required...")
-      if not self.pull_plugin_containers():
-        raise PullPluginException("Plugin container pulling failed!")
-
-      print("All plugins pulled!")
-
-    if start_containers:
-      if not self.is_no_internet_network_existing():
-        print("No-Internet network is not existing. Creating it now...")
-        if not self.create_no_internet_network():
-          raise CreateNetworkException("Could not create no-internet-network!")
-        print("No-Internet network created")
-
-      if not self.is_internet_network_existing():
-        print("Internet network is not existing. Creating it now...")
-        if not self.create_internet_network():
-          raise CreateNetworkException("Could not create internet-network!")
-        print("Internet network created")
-
-      print("Checking if all plugins are running and staring them if required...")
-
-      if not self.start_containers():
-        raise StartPluginException("Plugin container pulling failed!")
-
-      print("All plugins started!")
-    
+    # set scanner strategy
+    if isinstance(scanner_strategy, ScannerStrategy):
+        self.scanner_strategy = scanner_strategy
+    else:
+        raise InvalidScannerStrategyException("error invalid strategy")
+        
+    # startup checks
+    self.scanner_strategy.startup(self.engines)
 
   def read_config(self):
-    parser = ConfigParser.SafeConfigParser()
+    parser = SafeConfigParserExtended()
     parser.optionxform = str
     parser.read(self.cfg)
     self.parser = parser
@@ -767,85 +522,44 @@ class CMultiAV:
     print("update dict from queue complete!")
     return results
 
-  def is_no_internet_network_existing(self):
-    cmd = "docker network ls"
-    output = str(check_output(cmd.split(" ")))
-
-    return DOCKER_NETWORK_NO_INTERNET_NAME in output
-
-  def create_no_internet_network(self):
-    network_address = self.parser.get("MULTIAV", "DOCKER_NETWORK_NO_INTERNET")
-    cmd = "docker network create --driver bridge --internal --subnet={1}/24 {0}".format(DOCKER_NETWORK_NO_INTERNET_NAME, network_address)
-    check_output(cmd.split(" "))
-
-    return self.is_no_internet_network_existing()
-
-  def is_internet_network_existing(self):
-    cmd = "docker network ls"
-    output = str(check_output(cmd.split(" ")))
-
-    return DOCKER_NETWORK_INTERNET_NAME in output
-
-  def create_internet_network(self):
-    network_address = self.parser.get("MULTIAV", "DOCKER_NETWORK_INTERNET")
-    cmd = "docker network create --driver bridge --subnet={1}/24 {0}".format(DOCKER_NETWORK_INTERNET_NAME, network_address)
-    check_output(cmd.split(" "))
-
-    return self.is_internet_network_existing()
-
-  def scan(self, path, max_speed=AV_SPEED.ALL, allow_internet=False):
+  def scan(self, path, max_speed=AV_SPEED.ALL, allow_internet=False, event_handlers = dict()):
     if not os.path.exists(path):
       raise Exception("Path not found")
 
-    if self.processes > 1:
-      return self.multi_scan(path, max_speed, allow_internet)
-    else:
-      return self.single_scan(path, max_speed, allow_internet)
-    
-  def multi_scan(self, path, max_speed, allow_internet=False):
-    engines = list(self.engines)
-    return self.exec_func_multi_processes(random.sample(engines, len(engines)), self.scan_one, (path, max_speed, allow_internet))
+    # create promise for the whole scan
+    scan_promise = MultiActionPromise()
 
-  def single_scan(self, path, max_speed=AV_SPEED.ALL, allow_internet=False):
-    results = {PLUGIN_TYPE.AV: {}, PLUGIN_TYPE.METADATA: {}}
-    for av_engine in self.engines:
-      results.update(self.scan_one(av_engine, results, path=path, max_speed=max_speed, allow_internet=allow_internet))
-    return results
+    # register events if required
+    if len(event_handlers.keys()) != 0:
+      for event, handlers in event_handlers.items():
+        for handler in handlers:
+          self.scanner_strategy.on(event, path, handler)
+          scan_promise.then(
+            lambda res: self.scanner_strategy.unsubscribe_event_handler(event, path, handler),
+            lambda res: self.scanner_strategy.unsubscribe_event_handler(event, path, handler)
+          )
 
-  def scan_one(self, av_engine, results, q=None, path=None, max_speed = None, allow_internet=False):
-    with self.updateMutex.reader_lock:
-      av = av_engine(self.parser)
-      if av.is_disabled():
-        return results
+    for engine_class in self.engines:
+      # create engine instance
+      engine = engine_class(self.parser)
 
-      if av.container_requires_internet == True and not allow_internet:
-        print("[{0}] Skipping. Internet policy doesn't match".format(av.name))
-        return results
+      if engine.is_disabled():
+        continue
+
+      if engine.container_requires_internet == True and not allow_internet:
+        print("[{0}] Skipping. Internet policy doesn't match".format(engine.name))
+        continue
       
-      if max_speed == None or av.speed.value <= max_speed.value:
-        print("[{0}] Starting scan".format(av.name))
-        scan_success = av.scan(path)
-        
-        result = av.results
-        result["plugin_type"] = av.plugin_type
-        result["speed"] = av.speed.name
-        result["has_internet"] = av.container_requires_internet
-        results[av.name] = result
-          
-        if scan_success:
-          print("[{0}] Scan complete.".format(av.name))
-        else:
-          print("[{0}] Scan failed".format(av.name))
+      if max_speed == None or engine.speed.value <= max_speed.value:
+        engine_promise = self.scanner_strategy.scan(engine, path)
+        scan_promise.engine_promises[engine] = engine_promise
       else:
-        print("[{0}] Skipping scan. Too slow! AV: {1} Max: {2}".format(av.name, av.speed.value, max_speed.value))
+        print("[{0}] Skipping scan. Too slow! AV: {1} Max: {2}".format(engine.name, engine.speed.value, max_speed.value))
+        continue
+    
+    return scan_promise
 
-      if q is not None:
-        q.put(results)
-      
-      print("[{0}] Scan routine complete.".format(av.name))
-      return True
-
-  def scan_buffer(self, buf, max_speed=AV_SPEED.ALL, allow_internet=False):
+  def scan_buffer(self, buf, max_speed=AV_SPEED.ALL, allow_internet=False, event_handlers = dict()):
     f = NamedTemporaryFile(delete=False)
     f.write(buf)
     f.close()
@@ -853,128 +567,38 @@ class CMultiAV:
     fname = f.name
     os.chmod(f.name, 436)
 
-    try:
-      ret = self.scan(fname, max_speed, allow_internet)
-    finally:
-      print("unlinking file")
-      os.unlink(fname)
-      print("unlinking complete")
+    scan_promise = self.scan(fname, max_speed, allow_internet, event_handlers)
 
-    return ret
+    # unlink temp file if scan is done
+    scan_promise.then(
+      lambda res: self._unlink_temporary_file(fname),
+      lambda res: self._unlink_temporary_file(fname)
+    )
+
+    return scan_promise
+
+  def _unlink_temporary_file(self, fname):
+    print("unlinking file")
+    os.unlink(fname)
+    print("unlinking complete")
   
   def get_scanners(self):
     scanners = {}
-    for av in list(self.engines):
-      if av.is_disabled():
+    for engine in list(self.engines):
+      if engine.is_disabled():
         continue
-    
-      scanners[av.name] = {
-        'signature_version': av.get_signature_version(),
-        'plugin_type': av.plugin_type,
-        'has_internet': av.container_requires_internet
+
+      containers = self.scanner_strategy.find_containers_by_engine(engine)
+
+      signature_version = containers[0].get_signature_version() if len(containers) != 0 else "-"
+
+      scanners[engine.name] = {
+        'signature_version': signature_version,
+        'plugin_type': engine.plugin_type,
+        'has_internet': engine.container_requires_internet
       }
     
     return scanners
 
-  def update_one(self, av_engine, results, q = None):
-    result = ""
-    old_signature_version = "-"
-    av = av_engine(self.parser)
-
-    try:
-      if av.is_disabled():
-          return results
-
-      print("[{0}] Starting update".format(av.name))
-
-      old_signature_version = av.get_signature_version()
-
-      result = av.update()
-
-      print("[{0}] updated!".format(av.name))
-    except Exception as e:
-      print("[{0}] update failed! Exception: {1}".format(av.name, e))
-    
-    results[av.name] = {
-      'status': result,
-      'old_signature_version': old_signature_version,
-      'signature_version': av.get_signature_version(),
-      'plugin_type': av.plugin_type,
-      'has_internet': av.container_requires_internet,
-      'speed': av.speed.name
-      }
-
-    if q is not None:
-      q.put(results)
-
-    return results
-
   def update(self):
-    # TODO Implement handing for singe core prcessors => no mt overhead
-    with self.updateMutex.writer_lock:
-      return self.exec_func_multi_processes(list(self.engines), self.update_one)
-
-  def pull_one(self, plugin, results, q = None):
-    result = False
-    p = plugin(self.parser)
-
-    try:
-      if p.is_disabled():
-          return results
-
-      if not p.pull_container():
-        raise Exception("pull_container() returned False")
-
-      result = True
-    except Exception as e:
-      print("Pull of plugin {0} failed! Exception: {1}".format(p.name, e))
-    
-    results[p.name] = result
-
-    if q is not None:
-      q.put(results)
-
-    return results
-
-  def pull_plugin_containers(self):
-    # TODO Implement handing for singe core prcessors => no mt overhead
-    results = self.exec_func_multi_processes(list(self.engines), self.pull_one)
-    for plugin in results:
-      if not results[plugin]:
-        return False
-    
-    return True
-
-  def start_one(self, plugin, results, q = None):
-    result = False
-    p = plugin(self.parser)
-
-    try:
-      if p.is_disabled():
-          return results
-      
-      if not p.is_container_running():
-        if not p.start_container():
-          raise Exception("start_container() returned False")
-        
-        print("[{0}] Started!".format(p.name))
-
-      result = True
-    except Exception as e:
-      print("[{0}] Start failed! Exception: {1}".format(p.name, e))
-    
-    results[p.name] = result
-
-    if q is not None:
-      q.put(results)
-
-    return results
-
-  def start_containers(self):
-    # TODO Implement handing for singe core prcessors => no mt overhead
-    results = self.exec_func_multi_processes(list(self.engines), self.start_one)
-    for plugin in results:
-      if not results[plugin]:
-        return False
-    
-    return True
+    return self.scanner_strategy.update()

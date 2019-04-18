@@ -1,4 +1,4 @@
-$def with (scanners)
+$def with (update_results)
 <html>
 <head>
 <link href="/static/multiav.css" rel="stylesheet" type="text/css">
@@ -25,24 +25,47 @@ $def with (scanners)
   </div>
   <div class="content">
   <div id="background" style="height:70px"></div>
-    <h4 style="margin-top:40px">Plugin update results</h4>
+    <h4 style="margin-top:40px">Plugin update results<small style="font-weight: normal;padding-left: 30px;">last refresh: $update_results["last_refresh"]</small></h4>
+    <div>
+      <dl style="padding-left: 0px; font-size:80%">
+        <dt>State:</dt>
+        $if update_results["end_date"] == None:
+          <dd><span style="color:orange">updating...</span></dd>
+        $else:
+          <dd><span style="color:green">update complete</span></dd>
+
+        <dt>Start:</dt>
+        <dd>$update_results["start_date"]</dd>
+        <dt>End:</dt>
+        $ end_date = update_results["end_date"] if update_results["end_date"] != None else "-"
+        <dd>$end_date</dd>
+        <dt>Duration:</dt>
+        $if update_results["end_date"] == None:
+          <dd>-</dd>
+        $else:
+          $ duration = update_results["end_date"]-update_results["start_date"]
+          <dd>$duration</dd>
+      </ul>
+      
+      
+    </div>
     <table border="0" class="data-table">
-      $if len(scanners) != 0:
+      $ add_autorefresh = False
+      $if len(update_results['results'].keys()) != 0:
         <tr>
           <th>Name</th>
-          <th>Plugin type</th>
-          <th>Pre Update Signature version</th>
-          <th>Signature version</th>
+          <th>Old container</th>
+          <th>Old signature</th>
+          <th>New container</th>
+          <th>New signature</th>
           <th>Update state</th>
-          <th>Internet access</th>
         </tr>
-        $for scanner_name, values in sorted(scanners.items()):
+        $for scanner_name, values in sorted(update_results['results'].items()):
           <tr>
             <td>$scanner_name</td>
-            <td>
-                $plugin_type_to_string(values['plugin_type'])
-            </td>
+            <td>$values['old_container_build_time']</td>
             <td>$values['old_signature_version']</td>
+            <td>$values['container_build_time']</td>
             <td>$values['signature_version']</td>
             <td>
               $if values['status'] == "success":
@@ -51,12 +74,7 @@ $def with (scanners)
                 <span style="color:darkred">&#x25cf; error</span>
               $else:
                 <span style="color:orange">&#x25cf; $values['status']</span>
-            </td>
-            <td>
-              $if scanner["has_inernet"] == 1:
-                <span style="color:red">&#x25cf; enabled</span>
-              $else:
-                <span style="color:green">&#x25cf; disabled</span>
+                $ add_autorefresh = True
             </td>
           </tr>
       $else:
@@ -65,5 +83,11 @@ $def with (scanners)
         </tr>
     </table>
   </div>
+  $if add_autorefresh:
+    <script>
+      setTimeout(function () {
+        window.location.href = window.location.href;
+      }, 5000);
+    </script>
 </body>
 </html>

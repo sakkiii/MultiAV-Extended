@@ -91,9 +91,9 @@ $def with (scanners, cpu_count, AV_SPEED)
             <tr>
                 <td>$scanner['name']</td>
                 <td>
-                    $plugin_type_to_string(scanner["plugin_type"]).capitalize()
+                    $scanner["plugin_type"]
                 </td>
-                <td>$scanner['speed'].lower().capitalize()</td>
+                <td>$scanner['speed']</td>
                 <td>$scanner['engine_version']</td>
                 <td>$scanner['signature_version']</td>
                 <td>
