@@ -70,7 +70,6 @@ import random
 from enum import Enum
 from hashlib import sha1
 from tempfile import NamedTemporaryFile
-from subprocess import check_output, CalledProcessError, call, STDOUT, Popen, PIPE
 from multiprocessing import Process, Queue, cpu_count
 from datetime import datetime
 from promise import Promise
@@ -159,35 +158,49 @@ class CDockerAvScanner():
     
     return ".".join(ip)
     
-  def scan(self, path):
+  def scan(self, path, step_by_step_commands = True):
     try:
         # build request params
         filename = os.path.basename(path)
         
-        # measure scan time
-        start_time = time.time()
-
-        # copy file to container
-        cmd = "docker cp {0} {1}:/malware/{2}".format(path, self.container.id, filename)
-        output = self.container.machine.execute_command(cmd)
-        if "Error:" in output:
-          raise Exception("Could not copy file to target container")
-        
-        # scan
-        cmd = "docker exec {0} {2} --timeout 120 {1}".format(self.container.id, filename, self.binary_path)
-        response = self.container.machine.execute_command(cmd)
-        #print("[{0}] Scan response raw: {1}".format(self.name, response))
-        scan_time = time.time() - start_time
-        print("[{0}] Scan time: {1}s seconds".format(self.name, scan_time))
-        
-        # cleanup
-        if self.container.max_scans_per_container != 1:
-          cmd = "docker exec {0} rm /malware/{1}".format(self.container.id, filename)
+        if step_by_step_commands:
+          # copy file to container
+          cmd = "docker cp {0} {1}:/malware/{2}".format(path, self.container.id, filename)
           output = self.container.machine.execute_command(cmd)
-          if "rm:" in output:
-            print("Could not cleanup file {0} from target container {1} on machine {2}".format("/malware/" + filename, self.container.id, self.container.machine.id))
+          if "Error:" in output:
+            raise Exception("Could not copy file to target container")
+          
+          # scan
+          cmd = "docker exec {0} {2} --timeout 120 {1}".format(self.container.id, filename, self.binary_path)
+          response = self.container.machine.execute_command(cmd)
+          #print("[{0}] Scan response raw: {1}".format(self.name, response))
+          
+          # cleanup
+          if self.container.max_scans_per_container != 1:
+            cmd = "docker exec {0} rm /malware/{1}".format(self.container.id, filename)
+            output = self.container.machine.execute_command(cmd)
+            if "rm:" in output:
+              print("Could not cleanup file {0} from target container {1} on machine {2}".format("/malware/" + filename, self.container.id, self.container.machine.id))
+        else:
+          # combine commands for faster execution, hide outs of copy and cleanup
+          copy_cmd = "docker cp {0} {1}:/malware/{2} > /dev/null 2>&1".format(path, self.container.id, filename)
+          scan_cmd = "docker exec {0} {2} --timeout 120 {1}".format(self.container.id, filename, self.binary_path)
+
+          if self.container.machine.max_scans_per_container == 1:
+            #skip cleanup, container will be deleted anyway
+            cmd = " && ".join([copy_cmd, scan_cmd])
+            response = self.container.machine.execute_command(cmd)
+          else:
+            cleanup_cmd = "docker exec {0} rm /malware/{1} > /dev/null 2>&1".format(self.container.id, filename)
+
+            cmd = " && ".join([copy_cmd, scan_cmd, cleanup_cmd])
+            response = self.container.machine.execute_command(cmd)
+
 
         # deserialize result
+        if response[0] != "{":
+          # remove errors which could be in front of the json output
+          response = response[response.find("{"):]
         response_obj = json.loads(response)
         return self._normalize_results(response_obj)
     except Exception as e:
@@ -203,15 +216,24 @@ class CDockerAvScanner():
         }
 
   def _normalize_results(self, response_obj):
+    result = {}
+
+    # normalize
     if self.plugin_type == PLUGIN_TYPE.AV:
-      return response_obj[response_obj.keys()[0]]
+      result = response_obj[list(response_obj)[0]]
     elif self.plugin_type == PLUGIN_TYPE.METADATA or self.plugin_type == PLUGIN_TYPE.FILE_FORMATS:
-      return response_obj
+      result = response_obj
     elif self.plugin_type == PLUGIN_TYPE.INTEL:
-      if len(response_obj.keys()) == 1:
-        return response_obj[response_obj.keys()[0]]
+      if len(response_obj) == 1:
+        result = response_obj[list(response_obj)[0]]
       else:
-        return response_obj
+        result = response_obj
+    
+    # remove empty errors
+    if "error" in result and result["error"] == "":
+      del result["error"]
+    
+    return result
 
 #-----------------------------------------------------------------------
 class CDockerHashLookupService(CDockerAvScanner):
@@ -526,19 +548,13 @@ class CMultiAV:
     if not os.path.exists(path):
       raise Exception("Path not found")
 
-    # create promise for the whole scan
-    scan_promise = MultiActionPromise()
-
     # register events if required
-    if len(event_handlers.keys()) != 0:
+    if len(event_handlers) != 0:
       for event, handlers in event_handlers.items():
         for handler in handlers:
           self.scanner_strategy.on(event, path, handler)
-          scan_promise.then(
-            lambda res: self.scanner_strategy.unsubscribe_event_handler(event, path, handler),
-            lambda res: self.scanner_strategy.unsubscribe_event_handler(event, path, handler)
-          )
 
+    scan_promises = dict()
     for engine_class in self.engines:
       # create engine instance
       engine = engine_class(self.parser)
@@ -552,10 +568,21 @@ class CMultiAV:
       
       if max_speed == None or engine.speed.value <= max_speed.value:
         engine_promise = self.scanner_strategy.scan(engine, path)
-        scan_promise.engine_promises[engine] = engine_promise
+        scan_promises[engine] = engine_promise
       else:
         print("[{0}] Skipping scan. Too slow! AV: {1} Max: {2}".format(engine.name, engine.speed.value, max_speed.value))
         continue
+    
+    scan_promise = MultiActionPromise(engine_promises=scan_promises)
+    
+    # unregister events post scan
+    if len(event_handlers) != 0:
+      for event, handlers in event_handlers.items():
+        for handler in handlers:
+          scan_promise.then(
+            lambda res: self.scanner_strategy.unsubscribe_event_handler(event, path, handler),
+            lambda res: self.scanner_strategy.unsubscribe_event_handler(event, path, handler)
+          )
     
     return scan_promise
 

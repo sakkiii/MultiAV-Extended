@@ -5,8 +5,8 @@ import sys
 import json
 import pprint
 import time
+import requests
 
-from multiav import postfile
 from multiav.core import AV_SPEED
 from subprocess import check_output
 from multiav.parallelpromise import ParallelPromise
@@ -19,13 +19,16 @@ class MultiAVClient:
   def scan(self, filename, minspeed=AV_SPEED.ALL, allow_internet=False):
     def upload_function(resolve, reject):
       try:
-        selector = "/api/upload"
-        file_buf = open(filename, "rb").read()
-        files = [("file_upload", os.path.basename(filename), file_buf)]
-        fields = [("minspeed", str(minspeed.value)), ("allow_internet", "true" if allow_internet else "false")]
+        # setup parameters
+        multipart_form_data = {
+            'file_upload': (os.path.basename(filename), open(filename, 'rb')),
+            'minspeed': (None, str(minspeed.value)),
+            'allow_internet': (None, "true" if allow_internet else "false"),
+        }
 
-        response_json = postfile.post_multipart(self.host, selector, fields, files)
-        response = json.loads(response_json)
+        # send request
+        response = requests.post(self.host + "/api/upload", files=multipart_form_data)
+        response = response.json()
 
         if response is None:
           raise Exception("invalid response from host")
@@ -39,15 +42,21 @@ class MultiAVClient:
 
         # query report and return as soon as the report has no queued or scanning entries
         while not report_finished:
-          selector = "/api/report"
-          fields = [("id", str(report_id))]
-          response_json = postfile.post_multipart(self.host, selector, fields, [])
-          report = json.loads(response_json)
+          # setup parameters
+          multipart_form_data = {
+              'id': (None, str(report_id))
+          }
 
+          # send request
+          response = requests.post(self.host + "/api/report", files=multipart_form_data)
+          report = response.json()
+
+          # check if there are scanning or queued items in it
           report_finished = True
           for scan_report in report["result"]:
             if scan_report["queued"] == 1 or scan_report["scanning"] == 1:
               report_finished = False
+              print(report)
               break
 
           if not report_finished:
@@ -56,7 +65,6 @@ class MultiAVClient:
             time.sleep(5)
             continue
           
-          print("report finished")
           resolve(report)
       except Exception as e:
         print("[MultiAVClient] Exception: {0}".format(e))

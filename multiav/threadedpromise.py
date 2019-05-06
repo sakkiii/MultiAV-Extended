@@ -1,31 +1,19 @@
-import time
-import uuid
-
+import threading
 from sys import exc_info
-from threading import Thread, Event
+
 from promise import Promise
 
-# These are the potential states of a promise
-STATE_PENDING = -1
-STATE_REJECTED = 0
-STATE_FULFILLED = 1
-
-
 # starts the executor function non blocking in a seperate thread
-class ParallelPromise(Promise):
+class ThreadedPromise(Promise):
     def __init__(self, executor=None, scheduler=None):
         Promise.__init__(self, executor, scheduler)
+        self.thread = threading.Thread()
 
-    def wait(self, timeout=None):
-        e = Event()
-
-        def on_resolve_or_reject(_):
-            e.set()
-
-        self._then(on_resolve_or_reject, on_resolve_or_reject)
-        waited = e.wait(timeout)
-        if not waited:
-            raise Exception("Timeout")
+    def wait(self):
+        try:
+            self.join()
+        except:
+            pass
 
     def _resolve_from_executor(self, executor):
         # type: (Callable[[Callable[[T], None], Callable[[Exception], None]], None]) -> None
@@ -43,9 +31,8 @@ class ParallelPromise(Promise):
         error = None
         traceback = None
         try:
-            self.thread = Thread(target=executor, args=(resolve, reject))
-            self.thread.daemon = True
-            self.thread.start()            
+            self.thread = threading.Thread(target=executor, args=(resolve, reject))
+            self.thread.start()
         except Exception as e:
             traceback = exc_info()[2]
             error = e

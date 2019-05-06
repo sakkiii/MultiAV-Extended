@@ -59,6 +59,7 @@ $def result_data_table(plugin_name, plugin_result_data):
         </div>
         <div class="navigation pull-right">
             <ul>
+                <li><a href="/system" tabindex="3">System</a></li>
                 <li><a href="/about" tabindex="3">About</a></li>
             </ul>            
         </div>
@@ -76,7 +77,8 @@ $def result_data_table(plugin_name, plugin_result_data):
             <div class="actions-body">
               <span><a href="/export/csv?l=20p=$pagination['currentpage']">Export shown results as csv</a></span>
               <span><a href="/export/csv">Export all stored results as csv</a></span>            
-              </div>
+            </div>
+            <div style="float: right;font-size: 12px;"><input type="checkbox" checked onclick="toggle_refresh()" id="refreshtoggle"> Auto refresh</input></div>
           </div>
           <div class="pagination">
             <div>
@@ -148,7 +150,11 @@ $def result_data_table(plugin_name, plugin_result_data):
               </tr>
               <tr>
                 <td>Anaylsis date</td>
-                <td>$results["date"]</td>
+                $if results["end_date"] == None:
+                  <td>Started: $results["start_date"] - Scanning process running...</td>
+                $else:
+                  $ duration = results["end_date"]-results["start_date"]
+                  <td>Started: $results["start_date"] Duration: $duration</td>
               </tr>
             </table>
           </td>
@@ -187,10 +193,10 @@ $def result_data_table(plugin_name, plugin_result_data):
                   <tr>
                     <td>$scanner_name</td>
                     <td>
-                      $if "queued" in result:
+                      $if result["queued"]:
                         <span style="color:grey">&#x25cf;</span> queued...
                         $ add_autorefresh = True
-                      $elif "scanning" in result:
+                      $elif result["scanning"]:
                         <span style="color:orange">&#x25cf;</span> scanning...
                         $ add_autorefresh = True
                       $else:
@@ -234,11 +240,22 @@ $def result_data_table(plugin_name, plugin_result_data):
       </table>
   </div>
   $if add_autorefresh:
-    <script>
-      setTimeout(function () {
+    <script>var enableRefresh = true;</script>
+  $else:
+    <script>var enableRefresh = false;</script>
+
+  <script>
+    document.getElementById("refreshtoggle").checked = enableRefresh;
+
+    function toggle_refresh(){
+      enableRefresh = !enableRefresh;
+    }
+
+    setTimeout(function () {
+      if (enableRefresh)
         window.location.href = window.location.href;
-      }, 5000);
-    </script>
+    }, 5000);
+  </script>
   <script src="static/multiav.js" type="text/javascript"></script>
 </body>
 </html>

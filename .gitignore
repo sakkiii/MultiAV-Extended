@@ -42,3 +42,5 @@ output/*/index.html
 # Sphinx
 docs/_build
 .vscode/
+multiav/multiav.db.scans-d2
+multiav/multiav.db

@@ -126,6 +126,10 @@ dd {
   margin-left: auto;
 }
 
+.navigation.pull-right {
+  text-align: right;
+}
+
 #scansettings {
   padding-left: 200px;
   color: #666666;

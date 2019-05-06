@@ -3,30 +3,35 @@ from promise import Promise
 #-----------------------------------------------------------------------
 # this is basically a promise for the whole scan and for all subscans. use engine_then to setup the subtask callbacks
 class MultiActionPromise(Promise):
-    def __init__(self):
-        # TODO add engine promises via constructor => potential race
+    def __init__(self, engine_promises=None):
         Promise.__init__(self)
-        self.engine_promises = dict()
-    
+
+        self._engine_promises = dict()
+        if engine_promises is not None:
+            for engine, engine_promise in engine_promises.items():
+                engine_promise.then(self._did_all_engine_promises_run, self._did_all_engine_promises_run)
+                self._engine_promises[engine] = engine_promise
+
     def _did_all_engine_promises_run(self, res):
-        ret = True
-        all_fulfilled = True
-        for engine, engine_promise in self.engine_promises.items():
-            ret &= engine_promise._state != -1
-            all_fulfilled &= engine_promise._state == 1
+        not_pending = True
+        failed_promises = []
+        for engine, engine_promise in self._engine_promises.items():
+            not_pending &= engine_promise._state != -1
+            if engine_promise._state == 0:
+                failed_promises.append(engine.name)
         
-        if ret:
-            if all_fulfilled:
+        if not_pending:
+            if len(failed_promises) == 0:
                 self.do_resolve("All done")
             else:
-                self.do_reject("Some failed")
+                self.do_reject(Exception("Failed: " + ", ".join(failed_promises)))
 
     def engine_then(self, did_fulfill=None, did_reject=None):
-        for engine, engine_promise in self.engine_promises.items():
+        print(self._engine_promises)
+        for engine, engine_promise in self._engine_promises.items():
             engine_promise.then(did_fulfill, did_reject)
-            engine_promise.then(self._did_all_engine_promises_run, self._did_all_engine_promises_run)
 
         return self
     
     def get_scanning_engines(self):
-      return self.engine_promises.keys()
+      return list(self._engine_promises)
