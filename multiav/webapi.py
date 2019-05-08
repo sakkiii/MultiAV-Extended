@@ -156,7 +156,7 @@ class CDbSamples():
           scanners = self.get_scanner(result["name"]).list()
 
           if len(scanners) == 0:
-            scanner_id = self.insert_scanner(result["name"], int(result["plugin_type"]), result["has_internet"], result["updated"], result["engine"], int(result["speed"]))
+            scanner_id = self.insert_scanner(result["name"], int(result["plugin_type"]), result["has_internet"], int(result["speed"]), result["updated"], result["engine"])
           else:
             scanner_id = scanners[0]["id"]
           
@@ -176,7 +176,7 @@ class CDbSamples():
           scanners = self.get_scanner(result["name"]).list()
           
           if len(scanners) == 0:
-            scanner_id = self.insert_scanner(result["name"], int(result["plugin_type"]), result["has_internet"], result["updated"], result["engine"], int(result["speed"]))
+            scanner_id = self.insert_scanner(result["name"], int(result["plugin_type"]), result["has_internet"], int(result["speed"]), result["updated"], result["engine"])
           else:
             scanner_id = scanners[0]["id"]
 
@@ -282,7 +282,7 @@ class CDbSamples():
       rows = self.db.select("scanners", where=where, vars={'name': name})
       return rows
 
-  def insert_scanner(self, name, plugin_type, has_internet, signature_version, engine_version, speed):
+  def insert_scanner(self, name, plugin_type, has_internet, speed, signature_version, engine_version):
     if isinstance(plugin_type, int):
       plugin_type_value = plugin_type
     else:
@@ -292,8 +292,11 @@ class CDbSamples():
     
     try:
       with self.db.transaction():
-        row = self.db.insert("scanners",name=name, plugin_type=plugin_type_value, has_internet=has_internet, speed=speed, \
-                              signature_version=str(signature_version), engine_version=str(engine_version))
+        row = self.get_scanner(name)
+        if len(row.list()) == 0:
+          row = self.db.insert("scanners",name=name, plugin_type=plugin_type_value, has_internet=has_internet, speed=speed, \
+                                signature_version=str(signature_version), engine_version=str(engine_version))
+        
         return row
     except Exception as e:
       print("Exception insert_scanner")
@@ -301,7 +304,7 @@ class CDbSamples():
       print(e)
       return False
     
-  def update_scanner(self, name, plugin_type, has_internet, signature_version, engine_version = None, speed=None):
+  def update_scanner(self, name, plugin_type, has_internet, speed, signature_version, engine_version=None):
     # prevent unknown type errors
     if isinstance(plugin_type, int):
       plugin_type_value = plugin_type
@@ -317,11 +320,11 @@ class CDbSamples():
       with self.db.transaction():
         if engine_version is not None:
           updated_rows = self.db.update("scanners", vars={"name": name}, where=where, \
-                              plugin_type=plugin_type_value, has_internet=has_internet, \
+                              plugin_type=plugin_type_value, has_internet=has_internet, speed=speed, \
                               signature_version=str(signature_version), engine_version=str(engine_version))
         else:
           updated_rows = self.db.update("scanners", vars={"name": name}, where=where, \
-                              plugin_type=plugin_type_value, has_internet=has_internet, \
+                              plugin_type=plugin_type_value, has_internet=has_internet, speed=speed, \
                               signature_version=str(signature_version))
     except Exception as e:
       print("Exception update_scanner")
@@ -330,8 +333,8 @@ class CDbSamples():
 
     # insert new scanner if none existed)
     if updated_rows == 0:
-      self.insert_scanner(name, plugin_type, has_internet, signature_version, \
-        engine_version if engine_version is not None else "-", speed if speed is not None else "-")
+      self.insert_scanner(name, plugin_type, has_internet, signature_version, speed, \
+        engine_version if engine_version is not None else "-")
 
     return updated_rows
 
@@ -800,7 +803,7 @@ class api_upload:
         speed = res["speed"]
 
         print("webapi: updating scanner data for {0}".format(scanner_name))
-        db.update_scanner(scanner_name, plugin_type, has_internet, signature_version, engine_version, speed)
+        db.update_scanner(scanner_name, plugin_type, has_internet, speed, signature_version, engine_version)
         print("webapi: scanner db update for {0} complete".format(scanner_name))
       
     except Exception as e:
@@ -878,9 +881,9 @@ class upload:
         engine_version = scan_results[scanner_name]["engine"] if "engine" in scan_results[scanner_name] else "-"
         plugin_type = scan_results[scanner_name]["plugin_type"]
         has_internet = scan_results[scanner_name]["has_inernet"]
-        speed = scan_results[scanner_name]["speed"]
+        speed = int(scan_results[scanner_name]["speed"])
 
-        db.update_scanner(scanner_name, plugin_type, has_internet, signature_version, engine_version, speed)
+        db.update_scanner(scanner_name, plugin_type, has_internet, speed, signature_version, engine_version)
 
     # And show the results
     return render.results(report_id, scan_results, hashes, file_properties)
@@ -912,10 +915,11 @@ class update:
         plugin_type = result["plugin_type"]
         has_internet = result["has_internet"]
         signature_version = result["signature_version"]
-        speed = result["speed"]
+        engine_version = result["signature_version"] if "signature_version" in result else "-"
+        speed = int(result["speed"])
 
         with CDbSamples() as db:
-          db.update_scanner(result['engine'], plugin_type, has_internet, signature_version, speed)
+          db.update_scanner(result['engine'], plugin_type, has_internet, speed, signature_version, engine_version)
         
     except Exception as e:
       print("webapi: post engine update exception")
