@@ -94,7 +94,7 @@ class ScannerStrategy:
             }
     
     def _rise_event(self, event, file_to_scan, *args, **kargs):
-        print("_rise_event: {0} for file: {1}".format(event, file_to_scan))
+        #print("_rise_event: {0} for file: {1}".format(event, file_to_scan))
         if event in self._event_subscribers and file_to_scan in self._event_subscribers[event]:
             for handler in self._event_subscribers[event][file_to_scan]:
                 handler(*args, **kargs)
@@ -104,7 +104,7 @@ class ScannerStrategy:
             self._event_subscribers[event][file_to_scan].append(handler)
         else:
             self._event_subscribers[event] = {file_to_scan: [handler]}
-            print(self._event_subscribers)
+            #print(self._event_subscribers)
     
     def unsubscribe_event_handler(self, event, file_to_scan, handler):
         if event in self._event_subscribers and file_to_scan in self._event_subscribers[event]:
