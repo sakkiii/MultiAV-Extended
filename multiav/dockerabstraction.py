@@ -677,13 +677,13 @@ class DockerContainer():
                 cmd = cmd.replace("$DOCKERPARAMS$", "")
             else:
                 cmd = cmd.replace("$DOCKERPARAMS$", " " + " ".join(
-                    map(lambda kv: kv[0] + "=" + kv[1], self.engine.container_run_docker_parameters.items())))
+                    map(lambda kv: kv[0] + "=" + kv[1] if kv[1] != None else kv[0], self.engine.container_run_docker_parameters.items())))
                 
             # set command arguments
             if len(self.engine.container_run_command_arguments) == 0:
                 cmd = cmd.replace("$CMDARGS$", "")
             else:
-                cmd = cmd.replace("$CMDARGS$", " " + " ".join(map(lambda kv: kv[0] + "=" + kv[1], self.engine.container_run_command_arguments.items())))
+                cmd = cmd.replace("$CMDARGS$", " " + " ".join(map(lambda kv: kv[0] + "=" + kv[1] if kv[1] != None else kv[0], self.engine.container_run_command_arguments.items())))
             
             # start
             try:
