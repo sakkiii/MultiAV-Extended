@@ -198,6 +198,9 @@ class CDockerAvScanner():
 
 
         # deserialize result
+        if len(response) == 0:
+          raise Exception("Empty result")
+
         if response[0] != "{":
           # remove errors which could be in front of the json output
           response = response[response.find("{"):]
@@ -205,7 +208,10 @@ class CDockerAvScanner():
         return self._normalize_results(response_obj)
     except Exception as e:
         print("[{0}] Container: {2} Exception in scan method: {1}".format(self.name, e, self.container.id))
-        print(response)
+        try:
+          print(response)
+        except:
+          pass
         return { 
             "error": "{0}".format(e),
             "infected": False,
@@ -256,12 +262,18 @@ class CDockerHashLookupService(CDockerAvScanner):
       print("[{0}] Scan time: {1}s seconds".format(self.name, (time.time() - start_time)))
 
       # deserialize
+      if len(response) == 0:
+        raise Exception("Empty result")
+
       response_obj = json.loads(response)
       return self._normalize_results(response_obj)
 
     except Exception as e:
       print("[{0}] Container: {2} Exception in scan method: {1}".format(self.name, e, self.container.id))
-      print(response)
+      try:
+        print(response)
+      except:
+        pass
       return { 
           "error": "{0}".format(e),
           "infected": False,
@@ -341,6 +353,7 @@ class CAvastMalicePlugin(CDockerAvScanner):
     self.container_name = "avast"
     self.update_command_supported = False
     self.container_additional_files.append("license.avastlic")
+    self.container_run_docker_parameters["-v /home/ubuntu/license.avastlic:/etc/avast/license.avastlic"] = None
 
 #-----------------------------------------------------------------------
 class CAvgMalicePlugin(CDockerAvScanner):
