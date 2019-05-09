@@ -1,37 +1,15 @@
-MultiAV Scanner Wrapper
+MultiAV: Extended
 =======================
 
-MultiAV Python API. It can scan a file or directory with multiple AV
-engines simultaneously. It uses, with the only exception of ClamAV, the
-command line AV scanners and extracts the malware names from the output
-of the command line tools (for ClamAV it uses the https://code.google.com/p/pyclamd/ extension).
+Combine the awesome approaches of blacktop's av docker plugins with joxeankoret's MultiAV! Pure simplicity and pythonness! Autoscale support for huge scan tasks using docker-machine included!
 
-It supports a total of 18 AV engines. The list of currently supported
-engines is the following:
+![UploadImage](https://raw.githubusercontent.com/danieljampen/multiav/master/docs/images/multiav-upload.png)
 
-   * ClamAV (Ultra-fast, using the daemon)
-   * F-Prot (Ultra-fast)
-   * Comodo (Fast)
-   * BitDefender (Medium)
-   * ESET (Slow)
-   * Avira (Slow)
-   * Sophos (Medium)
-   * Avast (Ultra-fast, using the daemon)
-   * AVG (Ultra-fast, using the daemon)
-   * DrWeb (Slow)
-   * McAfee (Very slow, only enabled when running all the engines)
-   * Ikarus (Medium, using Wine in Linux/Unix)
-   * F-Secure (Fast)
-   * Kaspersky (Fast, tested under MacOSX & Linux)
-   * Zoner Antivirus (Ultra-fast)
-   * MicroWorld-eScan (Fast)
-   * Cyren (Ultra-fast)
-   * QuickHeal (Fast)
-   * Windows Defender using https://github.com/taviso/loadlibrary (Fast)
+![RunningScan](https://raw.githubusercontent.com/danieljampen/multiav/master/docs/images/multiav-scan-running.png)
 
-This tool have been tested only under Linux. However, it should work equally
-in other Unix based operating systems as well as in Windows as long as the
-output from the AV command line utilities maintains the same format.
+![SearchResults](https://raw.githubusercontent.com/danieljampen/multiav/master/docs/images/multiav-search.png)
+
+![SystemOverview](https://github.com/danieljampen/multiav/blob/master/docs/images/multiav-autoscale-overview.png)
 
 ## Example usages
 
