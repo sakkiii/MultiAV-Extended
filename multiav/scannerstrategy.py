@@ -5,6 +5,7 @@ import uuid
 import os
 import time
 import random
+import datetime
 
 from rwlock import RWLock
 from promise import Promise
@@ -264,7 +265,6 @@ class AutoScaleDockerStrategy(ScannerStrategy):
         self.min_machines = min_machines
 
         # locks
-        self._machines_filesystem_access_lock = RWLock()
         self._machine_lock = RWLock()
         self._worker_lock = RWLock()
         self._machines_starting = 0
@@ -322,12 +322,24 @@ class AutoScaleDockerStrategy(ScannerStrategy):
                 started_machine_counter += 1
                 print("readding machine {0} to the list of machines now...".format(machine[0]))
         
-        if len(self._machines) != 0:
-            print("readded {0} machines which were already runnning. try clean shut down next time...".format(len(self._machines)))
+        machine_count = len(self._machines)
+        if machine_count != 0:
+            # handle workers for possible newly detected machines
+            with self._worker_lock.writer_lock:
+                current_worker_amount = self.pool.get_worker_amount()
+                required_workers_for_machines = machine_count * self.max_containers_per_machine * self.max_scans_per_container
+                required_workers_for_machines = self._max_workers if required_workers_for_machines > self._max_workers else required_workers_for_machines
+
+                workers_to_add = required_workers_for_machines - current_worker_amount
+                if workers_to_add > 0:
+                    print("increasing workers by {0} as {1} running machines were detected.".format(workers_to_add, machine_count))
+                    self.pool.add_worker(amount=workers_to_add)
+                
+            print("readded {0} machines which were already runnning...".format(machine_count))
 
         # do we need to start machines to satisfy min_machines requirement?
-        if len(self._machines) < self.min_machines:
-            amount_of_machines_to_start = self.min_machines - len(self._machines)
+        if machine_count < self.min_machines:
+            amount_of_machines_to_start = self.min_machines - machine_count
             print("starting {0} machines due to min_machines requirement now...".format(amount_of_machines_to_start))
             for i in range(0, amount_of_machines_to_start):
                 if self._create_machine(never_shutdown=True) == None:
@@ -345,13 +357,10 @@ class AutoScaleDockerStrategy(ScannerStrategy):
             engine.container.remove_scan(file_path)
 
             # remove scan from machine if required
-            with self._machines_filesystem_access_lock.writer_lock:
-                print("checking if we need to cleanup the scan file {1} on the target machine {0}".format(file_path, engine.container.machine.id))
-                local_filename = os.path.basename(file_path)
-                if len(engine.container.machine.find_scans_by_file_path(file_path)) == 0:
-                    print("removing file {0} from machine {1} as its not used by a scan anymore".format(file_path, engine.container.machine.id))
-                    cmd = "docker-machine ssh {0} rm /tmp/{1}".format(engine.container.machine.id, local_filename)
-                    DockerMachine.execute_command(engine.container.machine, cmd)
+            print("checking if we need to cleanup the scan file {1} on the target machine {0}".format(file_path, engine.container.machine.id))
+            if len(engine.container.machine.find_scans_by_file_path(file_path)) == 0:
+                print("removing file {0} from machine {1} as its not used by a scan anymore".format(file_path, engine.container.machine.id))
+                engine.container.machine.remove_file_from_machine_tmp_dir(file_path)
             
             # remove / stop container if needed
             if self.max_scans_per_container == 1:
@@ -362,7 +371,9 @@ class AutoScaleDockerStrategy(ScannerStrategy):
             
     def _create_machine(self, never_shutdown=False):
         if len(self._machines) + 1 > self.max_machines:
+            print("create machine called but limit reached")
             return None
+        
         try:
             self._machines_starting += 1
             print("starting new machine...")
@@ -391,7 +402,7 @@ class AutoScaleDockerStrategy(ScannerStrategy):
         machine_count = len(self._machines)
 
         # search for a free spot on a running machine: iterate over machines in random order for better spreading
-        for m in random.sample(self._machines, len(self._machines)):
+        for m in random.sample(self._machines, machine_count):
             print("looking for container with engine {1} on machine {0}".format(m.id, engine.name))
             container, machine = m.try_do_scan(engine, file_path)
             if container is not None:
@@ -401,30 +412,19 @@ class AutoScaleDockerStrategy(ScannerStrategy):
         if container is None:
             # check if we are already starting a machine
             new_machine_count = 0
-            with self._machine_lock.reader_lock: # cant get reader_lock until potential writer is done creating a machine
+            with self._machine_lock.writer_lock: # cant get reader_lock until potential writer is done creating a machine
                 new_machine_count = len(self._machines)
 
-            # machine count changed => new machine is up. let's check if we find a place now..
-            if new_machine_count != machine_count:
-                return self._get_container_for_scan(engine, file_path)
+                # machine count changed => new machine is up. let's check if we find a place now..
+                if new_machine_count != machine_count:
+                    return self._get_container_for_scan(engine, file_path)
 
-            # start a new machine
-            with self._machine_lock.writer_lock:
+                # start a new machine
                 m = self._create_machine() # blocks for as long as the machine startup takes
-            
-            return self._get_container_for_scan(engine, file_path)
+                container, machine = m.try_do_scan(engine, file_path)
 
         # copy scan to target machine if required
-        with self._machines_filesystem_access_lock.writer_lock:
-            local_filename = os.path.basename(file_path)
-            ls_output = DockerMachine.execute_command(machine, "docker-machine ssh {0} ls {1}".format(machine.id, file_path))
-            if "No such file or directory" in ls_output:
-                #docker-machine scp [[user@]machine:][path] [[user@]machine:][path].
-                cmd = "docker-machine scp {0} {1}:/tmp/{2}".format(file_path, machine.id, local_filename)
-                output = DockerMachine.execute_command(machine, cmd)
-            
-                if "scp: " in output: #error case
-                    raise Exception("could not scp file to machine!")
+        machine.copy_file_to_machine_tmp_dir(file_path)
                 
         return container
 
@@ -557,7 +557,19 @@ class AutoScaleDockerStrategy(ScannerStrategy):
             "time_to_finish_queue": self._calculate_time_to_finish_queue(),
             "expected_machine_startup_time": self.expected_machine_startup_time,
             "minimal_machine_run_time": self.minimal_machine_run_time,
-            "machines": list(map(lambda machine: {machine.id: {"never_shutdown": machine.never_shutdown, "shutdown_check_last_date": machine._shutdown_check_last_date if not machine.never_shutdown else "-", "shutdown_check_next_date": machine.minimal_machine_run_time ** machine._shutdown_check_backoff if machine._shutdown_check_backoff != None else "-","container_amount": len(machine.containers), "containers": list(map(lambda container: {"id": container.id, "engine": container.engine.name, "scan_count": len(container.scans)}, machine.containers)) if len(machine.containers) != 0 else "None"}}, self._machines))
+            "machines": list(map(lambda machine: {
+                machine.id: {
+                    "never_shutdown": machine.never_shutdown, 
+                    "shutdown_check_last_date": str(machine._shutdown_check_last_date) if not machine.never_shutdown else "-", 
+                    "shutdown_check_next_date": str(machine._shutdown_check_last_date + datetime.timedelta(0, machine.minimal_machine_run_time ** machine._shutdown_check_backoff)) if machine._shutdown_check_backoff != None else "-",
+                    "container_amount": len(machine.containers), 
+                    "containers": list(map(lambda container: {
+                        "id": container.id, 
+                        "engine": container.engine.name, 
+                        "scan_count": len(container.scans)
+                        }, machine.containers)) if len(machine.containers) != 0 else "None"
+                    }
+                }, self._machines))
         }
         return statistics
 

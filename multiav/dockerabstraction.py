@@ -38,6 +38,9 @@ class DockerMachine():
         self.max_scans_per_container = max_scans_per_container
 
         self._container_lock = RWLock()
+        self._filesystem_access_lock = RWLock()
+        self._copied_tmp_files = []
+
         self._images_lock = dict(map(lambda engine: (engine.name, RWLock()), list(map(lambda engine_class: engine_class(self.cfg_parser), engine_classes))))
 
         self.containers = []
@@ -72,14 +75,17 @@ class DockerMachine():
 
     def setup_networks(self):
         print("Checking if all docker networks exist and creating them if required...")
-        if not self.does_no_internet_network_exist():
+
+        existing_networks = self._list_existing_networks()
+
+        if not self.DOCKER_NETWORK_NO_INTERNET_NAME in existing_networks:
             print("No-Internet network is not existing. Creating it now...")
             if not self.create_no_internet_network():
                 raise CreateNetworkException("Could not create no-internet-network!")
             
             print("No-Internet network created")
 
-        if not self.does_internet_network_exist():
+        if not self.DOCKER_NETWORK_INTERNET_NAME in existing_networks:
             print("Internet network is not existing. Creating it now...")
             if not self.create_internet_network():
                 raise CreateNetworkException("Could not create internet-network!")
@@ -93,11 +99,17 @@ class DockerMachine():
         pull_promises = dict()
         not_pulled = []
 
+        pulled_images = self._list_current_images()
+
         for engine_class in self.engine_classes:
             # create instance
             engine = engine_class(self.cfg_parser)
 
             if engine.is_disabled():
+                continue
+            
+            if "malice/{0}".format(engine.container_name) in pulled_images:
+                #print("Container {0} already pulled on machine {1}".format(engine.name, self.id))
                 continue
             
             def pull_failed_handler(engine_name):
@@ -153,19 +165,35 @@ class DockerMachine():
                 containers.append(container)
         
         return containers
-        
-    def _create_container(self, engine, id_overwrite = None, run_now = False):
+    
+    def _append_container_to_list(self, container):
+        with self._container_lock.writer_lock:
+            print("Created docker container {0} with engine: {1} on machine {2}".format(container.id, container.engine.name, self.id))
+            self.containers.append(container)
+
+    def _create_container(self, engine, id_overwrite = None, run_now = False, disable_indexing=False):
         try:
             container = DockerContainer(self, engine, self.max_scans_per_container, DOCKER_NETWORK_NO_INTERNET_NAME_DEFAULT, DOCKER_NETWORK_INTERNET_NAME_DEFAULT, id_overwrite = id_overwrite, run_now = run_now)
 
-            if run_now:
-                print("Created docker container {0} with engine: {1} on machine {2}".format(container.id, container.engine.name, self.id))
-                self.containers.append(container)
+            if not disable_indexing:
+                self._append_container_to_list(container)
 
             return container
         except Exception as e:
             print("_create_container {0} with engine: {1} on machine {2} Exception: {3}".format(container.id, container.engine.name, self.id, e))
             return None
+
+    def _list_current_images(self):
+        cmd = "docker images --format \"{{.Repository}}\" malice/*:current"
+        output = self.execute_command(cmd)
+        images = output.split("\n")
+        return images
+    
+    def _list_existing_networks(self):
+        cmd = "docker network ls --format \"{{.Name}}\""
+        output = self.execute_command(cmd)
+        networks = output.split("\n")
+        return networks
 
     def _list_running_containers(self):
         cmd = 'docker ps --filter status=running --format "table {{.Image}}\t{{.Names}}"'
@@ -208,31 +236,42 @@ class DockerMachine():
     def create_internet_network(self):
         network_address = self.cfg_parser.gets("MULTIAV", "DOCKER_NETWORK_INTERNET", "10.231.101.0")
         cmd = "docker network create --driver bridge --subnet={1}/24 {0}".format(self.DOCKER_NETWORK_INTERNET_NAME, network_address)
-        self.execute_command(cmd)
+        output = self.execute_command(cmd)
 
-        return self.does_internet_network_exist()
+        return not "Error" in output
 
     def create_container(self, engine):
-        if len(self.containers) == self.max_containers_per_machine:
-            return None
+        with self._container_lock.writer_lock:
+            if len(self.containers) == self.max_containers_per_machine:
+                return None
             
-        return self._create_container(engine, run_now=True)
+            container = self._create_container(engine, run_now=False)
+
+        # start container outside the lock context
+        if not container.run():
+            raise Exception("Could not run container with engine {0} on machine {1}".format(engine.name, self.id))
+        
+        return container
     
     def remove_container(self, container):
         # stop will also remove as the container is run with --rm flag
-        container.stop()
-        if container in self.containers:
-            self.containers.remove(container)
-        return True
+        with self._container_lock.writer_lock:
+            container.stop()
+            if container in self.containers:
+                self.containers.remove(container)
+            return True
     
     def remove_containers(self, container_ids):
         if len(container_ids) == 0:
             return
         
         # efficient way to stop multiple containers
-        cmd = "docker stop {0}".format(" ".join(container_ids))
-        output = self.execute_command(cmd, call_super=False)
-        return not "error" in output
+        with self._container_lock.writer_lock:
+            self.containers = [c for c in self.containers if c.id not in container_ids]
+
+            cmd = "docker stop {0}".format(" ".join(container_ids))
+            output = self.execute_command(cmd, call_super=False)
+            return not "error" in output
     
     def pull_container(self, engine):
         container = DockerContainer(self, engine, -1, self.DOCKER_NETWORK_NO_INTERNET_NAME, self.DOCKER_NETWORK_INTERNET_NAME, False)
@@ -295,6 +334,35 @@ class DockerMachine():
         
         return str(output.decode("utf-8"))
 
+    def copy_file_to_machine_tmp_dir(self, file_path):
+        with self._filesystem_access_lock.writer_lock:
+            local_filename = os.path.basename(file_path)
+            if local_filename in self._copied_tmp_files:
+                return True
+
+            '''ls_output = self.execute_command(self, "docker-machine ssh {0} ls {1}".format(machine.id, file_path), call_super=True)
+            if "No such file or directory" in ls_output:'''
+            #docker-machine scp [[user@]machine:][path] [[user@]machine:][path].
+            cmd = "docker-machine scp {0} {1}:/tmp/{2}".format(file_path, self.id, local_filename)
+            output = self.execute_command(cmd, call_super=True)
+        
+            if "scp: " in output: #error case
+                raise Exception("could not scp file to machine!")
+
+            self._copied_tmp_files.append(local_filename)
+            return True
+
+    def remove_file_from_machine_tmp_dir(self, file_path):
+        with self._filesystem_access_lock.writer_lock:
+            local_filename = os.path.basename(file_path)
+            if not local_filename in self._copied_tmp_files:
+                return True
+        
+            cmd = "docker-machine ssh {0} rm /tmp/{1}".format(self.id, local_filename)
+            output = self.execute_command(cmd, call_super=True)
+            self._copied_tmp_files.remove(local_filename)
+            return True
+
     def try_do_scan(self, engine, file_path):
         # abstract
         pass
@@ -303,26 +371,37 @@ class LocalDynamicDockerMachine(DockerMachine):
     def __init__(self, cfg_parser, engine_classes, max_containers_per_machine, max_scans_per_container, id_overwrite = None):
         DockerMachine.__init__(self, cfg_parser, engine_classes, max_containers_per_machine, max_scans_per_container, id_overwrite = id_overwrite)
 
-        if len(self.containers) > max_containers_per_machine:
-            print("found running containers on this docker machine. Stopping them now to get a clean state...")
-            for container in self.containers[max_containers_per_machine:]:
-                self.remove_container(container)
-                print("stopped container {0} running engine {1}".format(container.id, container.engine.name))
+        with self._container_lock.writer_lock:
+            if len(self.containers) > max_containers_per_machine:
+                print("found running containers on this docker machine. Stopping them now to get a clean state...")
+                for container in self.containers[max_containers_per_machine:]:
+                    self.remove_container(container)
+                    print("stopped container {0} running engine {1}".format(container.id, container.engine.name))
     
     def try_do_scan(self, engine, file_path):
-        containers = self.find_containers_by_engine(engine)
-        
-        if len(containers) == 0:
-            container = self._create_container(engine, run_now=True)
-            if not container.try_do_scan(file_path):
-                return None, None
+        try:
+            self._container_lock.writer_lock.acquire()
+            containers = self.find_containers_by_engine(engine)
             
-            return container, self
-        
-        if not containers[0].try_do_scan(file_path):
-            return None, None
-        
-        return containers[0], self
+            if len(containers) != 0:
+                if not containers[0].try_do_scan(file_path):
+                    return None, None
+                
+                return containers[0], self
+            else:
+                container = self._create_container(engine, run_now=False)
+                self._container_lock.writer_lock.release()
+
+                if not container.run():
+                    raise Exception("Could not run container with engine {0} on machine {1}".format(engine.name, self.id))
+
+                if not container.try_do_scan(file_path):
+                    raise Exception("Could not add scan to newly created container with engine {0} on machine {1}".format(engine.name, self.id))
+                
+                return container, self
+        finally:
+            if self._container_lock.writer_lock._is_owned():
+                self._container_lock.writer_lock.release()
 
 class LocalStaticDockerMachine(DockerMachine):
     def __init__(self, cfg_parser, engine_classes, id_overwrite = None):
@@ -407,6 +486,7 @@ class DockerMachineMachine(DockerMachine):
 
     def _schedule_shutdown_check(self):
         def fn():
+            self._shutdown_check_last_date = datetime.datetime.now()
             self._shutdown_check_backoff = 1
             
             while True:
@@ -480,37 +560,61 @@ class DockerMachineMachine(DockerMachine):
         return output
 
     def try_do_scan(self, engine, file_path):
-        if self.max_scans_per_container == 1:
-            # do we have the resources to add a new container?
-            if len(self.containers) == self.max_containers_per_machine:
-                print("No ressources to start container with engine {0} on machine {1}".format(engine.name, self.id))
-                return None, None
+        try:
+            self._container_lock.writer_lock.acquire()
+            container_amount = len(self.containers)
 
-            container = self._create_container(engine, run_now=True)
-            if container is None:
-                raise Exception("Could not create container with engine {0} on machine {1}".format(engine.name, self.id))
+            if self.max_scans_per_container == 1:
+                # do we have the resources to add a new container?
+                if container_amount >= self.max_containers_per_machine:
+                    print("No ressources to start container with engine {0} on machine {1}".format(engine.name, self.id))
+                    self._container_lock.writer_lock.release()
+                    return None, None
 
-            if not container.try_do_scan(file_path):
-                return None, None
-            
-            return container, self
-        
-        # multiple scans per container are allowed
-        if len(self.containers) != 0:
-            # check if we can use a running container
-            containers = self.find_containers_by_engine(engine)
-            for container in containers:
-                if container.try_do_scan(file_path):
-                    print("using container for multiple scans")
-                    return container, self
-            
-        # create a new container for scan
-        container = self._create_container(engine, run_now=True)
-        if not container.try_do_scan(file_path):
-            return None, None
-        
-        return container, self
+                container = self._create_container(engine, run_now=False)
+                self._container_lock.writer_lock.release()
 
+                # start container outside the lock context
+                if not container.run():
+                    raise Exception("Could not run container with engine {0} on machine {1}".format(engine.name, self.id))
+
+                if not container.try_do_scan(file_path):
+                    raise Exception("Could not add scan to newly created container with engine {0} on machine {1}".format(engine.name, self.id))
+                
+                return container, self
+            else:
+                # multiple scans per container are allowed
+                if container_amount != 0:
+                    # check if we can use a running container
+                    containers = self.find_containers_by_engine(engine)
+                    for container in containers:
+                        if container.try_do_scan(file_path):
+                            print("using container for multiple scans")
+                            self._container_lock.writer_lock.release()
+                            return container, self
+                
+                # can we create a new container?
+                if container_amount >= self.max_containers_per_machine:
+                    print("No ressources to start container with engine {0} on machine {1}".format(engine.name, self.id))
+                    self._container_lock.writer_lock.release()
+                    return None, None
+
+                # create a new container for scan
+                container = self._create_container(engine, run_now=False)
+                self._container_lock.writer_lock.release()
+                
+                # start container outside the lock context
+                if not container.run():
+                    raise Exception("Could not run container with engine {0} on machine {1}".format(engine.name, self.id))
+
+                if not container.try_do_scan(file_path):
+                    raise Exception("Could not add scan to newly created container with engine {0} on machine {1}".format(engine.name, self.id))
+                
+                return container, self
+        finally:
+            if self._container_lock.writer_lock._is_owned():
+                self._container_lock.writer_lock.release()
+    
 class DockerContainer():
     def __init__(self, machine, engine, max_scans_per_container, network_no_internet_name, network_internet_name, id_overwrite = None, run_now = False):
         if id_overwrite:

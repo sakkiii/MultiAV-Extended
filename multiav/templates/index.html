@@ -50,7 +50,7 @@ $def with (scanners, cpu_count, AV_SPEED)
                         <p class="size" data-dz-size></p>
                     </div>
                     <div class="file-cell">
-                        <p class="status">queued</p>
+                        <p class="status">upload queued</p>
                     </div>
                     <div>
                         <a class="cancel" data-dz-remove title="remove">&#x2715;</a>
@@ -166,7 +166,7 @@ $def with (scanners, cpu_count, AV_SPEED)
         },
         uploadprogress: function (file, progress) {
             if(progress == 100) {
-                file.previewElement.querySelector(".status").innerHTML = "adding to queue...";
+                file.previewElement.querySelector(".status").innerHTML = "adding to scan queue...";
             } else {
                 file.previewElement.querySelector(".status").innerHTML = "uploading (" + Math.round(progress) + "%)";
             }
@@ -174,7 +174,7 @@ $def with (scanners, cpu_count, AV_SPEED)
         success: function(file, response) {
             response_object = JSON.parse(response);
             reportIds.push(response_object["id"]);
-            file.previewElement.querySelector(".status").innerHTML = "queued!";
+            file.previewElement.querySelector(".status").innerHTML = "scan queued!";
         },
         errror: function(file, response) {
             file.previewElement.querySelector(".status").innerHTML = "upload failed";

@@ -198,7 +198,7 @@ class CDockerAvScanner():
 
 
         # deserialize result
-        if len(response) == 0:
+        if len(response) < len("{\"0\":0}"):
           raise Exception("Empty result")
 
         if response[0] != "{":
@@ -262,7 +262,7 @@ class CDockerHashLookupService(CDockerAvScanner):
       print("[{0}] Scan time: {1}s seconds".format(self.name, (time.time() - start_time)))
 
       # deserialize
-      if len(response) == 0:
+      if len(response) < len("{\"0\":0}"):
         raise Exception("Empty result")
 
       response_obj = json.loads(response)
