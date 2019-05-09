@@ -156,7 +156,13 @@ class CDbSamples():
           scanners = self.get_scanner(result["name"]).list()
 
           if len(scanners) == 0:
-            scanner_id = self.insert_scanner(result["name"], int(result["plugin_type"]), result["has_internet"], int(result["speed"]), result["updated"], result["engine"])
+            scanner_id = self.insert_scanner(
+              name=result["name"], 
+              plugin_type=int(result["plugin_type"]), 
+              has_internet=result["has_internet"], 
+              speed=int(result["speed"]),
+              signature_version=result["updated"],
+              engine_version=result["engine"])
           else:
             scanner_id = scanners[0]["id"]
           
@@ -176,7 +182,13 @@ class CDbSamples():
           scanners = self.get_scanner(result["name"]).list()
           
           if len(scanners) == 0:
-            scanner_id = self.insert_scanner(result["name"], int(result["plugin_type"]), result["has_internet"], int(result["speed"]), result["updated"], result["engine"])
+            scanner_id = self.insert_scanner(
+              name=result["name"], 
+              plugin_type=int(result["plugin_type"]), 
+              has_internet=result["has_internet"], 
+              speed=int(result["speed"]),
+              signature_version=result["updated"], 
+              engine_version=result["engine"])
           else:
             scanner_id = scanners[0]["id"]
 
@@ -333,8 +345,13 @@ class CDbSamples():
 
     # insert new scanner if none existed)
     if updated_rows == 0:
-      self.insert_scanner(name, plugin_type, has_internet, signature_version, speed, \
-        engine_version if engine_version is not None else "-")
+      self.insert_scanner(
+        name=name, 
+        plugin_type=plugin_type, 
+        has_internet=has_internet, 
+        speed=speed,
+        signature_version=signature_version,
+        engine_version=engine_version if engine_version is not None else "-")
 
     return updated_rows
 
@@ -803,7 +820,13 @@ class api_upload:
         speed = res["speed"]
 
         print("webapi: updating scanner data for {0}".format(scanner_name))
-        db.update_scanner(scanner_name, plugin_type, has_internet, speed, signature_version, engine_version)
+        db.update_scanner(
+          name=scanner_name, 
+          plugin_type=plugin_type, 
+          has_internet=has_internet, 
+          speed=speed, 
+          signature_version=signature_version,
+          engine_version=engine_version)
         print("webapi: scanner db update for {0} complete".format(scanner_name))
       
     except Exception as e:
@@ -883,7 +906,13 @@ class upload:
         has_internet = scan_results[scanner_name]["has_inernet"]
         speed = int(scan_results[scanner_name]["speed"])
 
-        db.update_scanner(scanner_name, plugin_type, has_internet, speed, signature_version, engine_version)
+        db.update_scanner(
+          name=scanner_name, 
+          plugin_type=plugin_type, 
+          has_internet=has_internet, 
+          speed=speed, 
+          signature_version=signature_version,
+          engine_version=engine_version)
 
     # And show the results
     return render.results(report_id, scan_results, hashes, file_properties)
@@ -904,10 +933,11 @@ class update:
 
   def _post_engine_update(self, result):
     try:
-      print("update of {0} complete!".format(result['engine']))
+      scanner_name = result['engine']
+      print("update of {0} complete!".format(scanner_name))
 
       # store to temp object
-      update_results['results'][result['engine']] = result
+      update_results['results'][scanner_name] = result
 
       # update db if required
       update_successs = result['status'] != "error"      
@@ -919,7 +949,13 @@ class update:
         speed = int(result["speed"])
 
         with CDbSamples() as db:
-          db.update_scanner(result['engine'], plugin_type, has_internet, speed, signature_version, engine_version)
+          db.update_scanner(
+            name=scanner_name, 
+            plugin_type=plugin_type, 
+            has_internet=has_internet, 
+            speed=speed, 
+            signature_version=signature_version,
+            engine_version=engine_version)
         
     except Exception as e:
       print("webapi: post engine update exception")

@@ -919,23 +919,20 @@ class DockerContainer():
                 resolve(json.dumps(self._update(), cls=EnumEncoder))
             except Exception as e:
                 print("exception in update_function: {0}".format(e))
-                reject()
+                reject(e)
 
         return ParallelPromise(lambda resolve, reject: update_wrapper_function(resolve, reject))
 
     def _update(self):
         try:
-            # make sure container is running to get pre update signature version
-            old_signature_version = self.get_signature_version()
-
-            # give docker some time to stop the container
-            time.sleep(2)
-
             # get old container version info
+            old_signature_version = self.get_signature_version()
             old_container_version, old_container_build_time = self.get_container_version()
+            new_container_version = old_container_version
+            new_signature_version = old_signature_version
+            new_container_build_time = old_container_build_time
 
             # pull container
-            new_container_version = old_container_version
             if self.engine.update_pull_supported:
                 # remove old latest image
                 '''with self.machine._images_lock[self.engine.name].writer_lock:
@@ -951,23 +948,20 @@ class DockerContainer():
                 
                 # Get container version info
                 new_container_version, new_container_build_time = self.get_container_version()
-
-            # skip update call if not supported => updates via pull only
-            new_signature_version = old_signature_version
-
-            # cleanup :old and :update image
-            try:
-                '''cmd = "docker images malice/{0}:updated".format(self.engine.container_name)
-                output = self.machine.execute_command(cmd)
-
-                if self.engine.container_name in output:'''
-                cmd = "docker rmi malice/{0}:updated malice/{0}:old".format(self.engine.container_name)
-                output = self.machine.execute_command(cmd)
-            except Exception as e:
-                print("[{0}] docker images / rmi exception {1}".format(self.engine.container_name, e))
-                raise Exception("remove :old and :updated image failed")
-                
+               
             if self.engine.update_command_supported:
+                # cleanup :old and :update image
+                try:
+                    '''cmd = "docker images malice/{0}:updated".format(self.engine.container_name)
+                    output = self.machine.execute_command(cmd)
+
+                    if self.engine.container_name in output:'''
+                    cmd = "docker rmi malice/{0}:updated malice/{0}:old".format(self.engine.container_name)
+                    output = self.machine.execute_command(cmd)
+                except Exception as e:
+                    print("[{0}] docker images / rmi exception {1}".format(self.engine.container_name, e))
+                    raise Exception("remove :old and :updated image failed")
+
                 # run new container to do the update
                 try:
                     cmd = "docker run --name {0} malice/{1}:latest update".format(self.id, self.engine.container_name)
@@ -1015,7 +1009,7 @@ class DockerContainer():
                 'container_version': new_container_version,
                 'plugin_type': self.engine.plugin_type,
                 'has_internet': self.engine.container_requires_internet,
-                'speed': self.engine.speed.name
+                'speed': self.engine.speed
             }
         except Exception as e:
             return {
@@ -1028,5 +1022,5 @@ class DockerContainer():
                 'container_version': new_container_version,
                 'plugin_type': self.engine.plugin_type,
                 'has_internet': self.engine.container_requires_internet,
-                'speed': self.engine.speed.name
+                'speed': self.engine.speed
             }
