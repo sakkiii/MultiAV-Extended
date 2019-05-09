@@ -438,6 +438,10 @@ class AutoScaleDockerStrategy(ScannerStrategy):
 
             # start a new machine
             m = self._create_machine() # blocks for as long as the machine startup takes
+
+            if m is None:
+                return self._get_container_for_scan(engine, file_path)
+                
             container, machine = m.try_do_scan(engine, file_path)
 
         # copy scan to target machine if required
