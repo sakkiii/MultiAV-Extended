@@ -351,7 +351,6 @@ class CAvastMalicePlugin(CDockerAvScanner):
     self.speed = AV_SPEED.FAST
     self.plugin_type = PLUGIN_TYPE.AV
     self.container_name = "avast"
-    self.update_command_supported = False
     self.container_additional_files.append("license.avastlic")
     self.container_run_docker_parameters["-v /home/ubuntu/license.avastlic:/etc/avast/license.avastlic"] = None
 
