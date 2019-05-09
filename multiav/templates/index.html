@@ -166,7 +166,7 @@ $def with (scanners, cpu_count, AV_SPEED)
         },
         uploadprogress: function (file, progress) {
             if(progress == 100) {
-                file.previewElement.querySelector(".status").innerHTML = "scanning...";
+                file.previewElement.querySelector(".status").innerHTML = "adding to queue...";
             } else {
                 file.previewElement.querySelector(".status").innerHTML = "uploading (" + Math.round(progress) + "%)";
             }
@@ -174,10 +174,10 @@ $def with (scanners, cpu_count, AV_SPEED)
         success: function(file, response) {
             response_object = JSON.parse(response);
             reportIds.push(response_object["id"]);
-            file.previewElement.querySelector(".status").innerHTML = "scan completed";
+            file.previewElement.querySelector(".status").innerHTML = "queued!";
         },
         errror: function(file, response) {
-            file.previewElement.querySelector(".status").innerHTML = "scan failed";
+            file.previewElement.querySelector(".status").innerHTML = "upload failed";
         },
         complete: function() {
             myDropzone = this;
