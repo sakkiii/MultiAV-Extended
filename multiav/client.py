@@ -16,8 +16,8 @@ class MultiAVClient:
   def __init__(self, host):
     self.host = host
 
-  def scan(self, filename, minspeed=AV_SPEED.ALL, allow_internet=False):
-    def upload_function(resolve, reject):
+  def scan(self, filename, minspeed=AV_SPEED.ALL, allow_internet=False, dont_pull_result=False):
+    def upload_function(resolve, reject, dont_pull_result):
       try:
         # setup parameters
         multipart_form_data = {
@@ -35,6 +35,10 @@ class MultiAVClient:
         
         if response["file"]["name"] != os.path.basename(filename):
           raise Exception("filenames of report and upload don't match!")
+
+        # pull the result?
+        if dont_pull_result:
+          resolve(response)
 
         # get report id from response
         report_id = response["id"]
@@ -72,7 +76,7 @@ class MultiAVClient:
         reject(e)
         return
 
-    return ParallelPromise(lambda resolve, reject: upload_function(resolve, reject))
+    return ParallelPromise(lambda resolve, reject: upload_function(resolve, reject, dont_pull_result))
 
 #-----------------------------------------------------------------------
 def usage():
