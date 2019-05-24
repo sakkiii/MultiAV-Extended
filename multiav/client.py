@@ -56,22 +56,8 @@ class MultiAVClient:
           report = response.json()
 
           # check if there are scanning or queued items in it
-          report_finished = True
-          for scan_report in report["result"]:
-            if "error" in scan_report:
-              continue
-            
-            if "result" in scan_report and len(scan_report["result"]) == 0:
-              if scan_report["queued"] == 1:
-                print("report {0} is still queued".format(report_id))
-                report_finished = False
-                break
-              
-              if scan_report["scanning"] == 1:
-                print("report {0} is still scanning".format(report_id))
-                report_finished = False
-                break
-
+          report_finished = len(report["end_date"]) != 0
+          
           if not report_finished:
             # wait some seconds before requering
             #print("report not finished yet. rechecking in 5s...")
