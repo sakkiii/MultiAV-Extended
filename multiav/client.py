@@ -58,10 +58,19 @@ class MultiAVClient:
           # check if there are scanning or queued items in it
           report_finished = True
           for scan_report in report["result"]:
-            if scan_report["queued"] == 1 or scan_report["scanning"] == 1:
-              report_finished = False
-              print(report)
-              break
+            if "error" in scan_report:
+              continue
+            
+            if "result" in scan_report and len(scan_report["result"]) == 0:
+              if scan_report["queued"] == 1:
+                print("report {0} is still queued".format(report_id))
+                report_finished = False
+                break
+              
+              if scan_report["scanning"] == 1:
+                print("report {0} is still scanning".format(report_id))
+                report_finished = False
+                break
 
           if not report_finished:
             # wait some seconds before requering
