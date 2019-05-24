@@ -165,15 +165,35 @@ class CDockerAvScanner():
         
         if step_by_step_commands:
           # copy file to container
-          cmd = "docker cp {0} {1}:/malware/{2}".format(path, self.container.id, filename)
-          output = self.container.machine.execute_command(cmd)
-          if "Error:" in output:
-            raise Exception("Could not copy file to target container")
+          file_copied = False
+          current_try = 0
+          while not file_copied and current_try < 5:
+            cmd = "docker cp {0} {1}:/malware/{2}".format(path, self.container.id, filename)
+            output = self.container.machine.execute_command(cmd)
+            if "Error:" in output:
+              print("Could not copy file to target container! try: {0} output: {1}".format(current_try, output))
+              time.sleep(2)
+              current_try += 1
+            else:
+              file_copied = True
           
           # scan
           cmd = "docker exec {0} {2} --timeout 120 {1}".format(self.container.id, filename, self.binary_path)
-          response = self.container.machine.execute_command(cmd)
-          #print("[{0}] Scan response raw: {1}".format(self.name, response))
+          response = ""
+          current_try = 0
+          while len(response) < len("{\"0\":0}") and current_try < 5:
+            response = self.container.machine.execute_command(cmd)
+            
+            # remove non json outputs (could be errors reported to stdout)
+            if response[0] != "{":
+              response = response[response.find("{"):]
+            if response[-1] != "}":
+              response = response[:response.rfind("}")+1]
+
+            if len(response) < len("{\"0\":0}"):
+              print("[{0}] Scan response empty. trying again...".format(self.name))
+              current_try += 1
+              time.sleep(2)
           
           # cleanup
           if self.container.max_scans_per_container != 1:
@@ -196,14 +216,16 @@ class CDockerAvScanner():
             cmd = " && ".join([copy_cmd, scan_cmd, cleanup_cmd])
             response = self.container.machine.execute_command(cmd)
 
-
-        # deserialize result
+          # remove non json outputs (could be errors reported to stdout)
+          if response[0] != "{":
+            response = response[response.find("{"):]
+          if response[-1] != "}":
+            response = response[:response.rfind("}")+1]
+        
+        # dont try to deserialize if empty result
         if len(response) < len("{\"0\":0}"):
-          raise Exception("Empty result")
+          raise Exception("no result")
 
-        if response[0] != "{":
-          # remove errors which could be in front of the json output
-          response = response[response.find("{"):]
         response_obj = json.loads(response)
         return self._normalize_results(response_obj)
     except Exception as e:
@@ -256,16 +278,21 @@ class CDockerHashLookupService(CDockerAvScanner):
       filehash = sha1(buf).hexdigest()
 
       # scan
-      start_time = time.time()      
       cmd = "docker exec {0} {1} lookup {2}".format(self.container.id, self.binary_path, filehash)
-      response = self.container.machine.execute_command(cmd)
-      print("[{0}] Scan time: {1}s seconds".format(self.name, (time.time() - start_time)))
+      response = ""
+
+      while len(response) < len("{\"0\":0}"):
+        response = self.container.machine.execute_command(cmd)
+        if len(response) < len("{\"0\":0}"):
+          print("[{0}] Scan response empty. trying again...".format(self.name))
 
       # deserialize
-      if len(response) < len("{\"0\":0}"):
-        raise Exception("Empty result")
-
+      if response[0] != "{":
+        # remove errors which could be in front of the json output
+        response = response[response.find("{"):]
+      
       response_obj = json.loads(response)
+      
       return self._normalize_results(response_obj)
 
     except Exception as e:
