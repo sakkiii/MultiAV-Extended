@@ -735,8 +735,10 @@ class api_report:
       result = db.search_report_by_id(i["id"])
     
     if len(result) == 1:
+      print("webapi: returning report for id {0}".format(i["id"]))
       return json.dumps(result[0])
     else:
+      print("webapi: error returning report for id {0}: not found".format(i["id"]))
       return json.dumps({"error": "report not found"})
 
 # -----------------------------------------------------------------------
