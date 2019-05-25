@@ -52,21 +52,27 @@ class MultiAVClient:
           }
 
           # send request
-          response = requests.post(self.host + "/api/report", files=multipart_form_data)
-          report = response.json()
+          try:
+            response = requests.post(self.host + "/api/report", files=multipart_form_data)
+            report = response.json()
 
-          # check if there are scanning or queued items in it
-          report_finished = len(report["end_date"]) != 0
-          
-          if not report_finished:
-            # wait some seconds before requering
-            #print("report not finished yet. rechecking in 5s...")
+            # check if there are scanning or queued items in it
+            report_finished = "end_date" in report and report["end_date"] != None
+
+            if not report_finished:
+              # wait some seconds before requering
+              #print("report not finished yet. rechecking in 5s...")
+              time.sleep(5)
+              continue
+            
+            resolve(report)
+          except Exception as e:
+            print("[MultiAVClient] Report id {1} query exception. Retrying in 5s... Exception: {0}".format(e, report_id))
+            print(e)
             time.sleep(5)
-            continue
-          
-          resolve(report)
+
       except Exception as e:
-        print("[MultiAVClient] Exception: {0}".format(e))
+        print("[MultiAVClient] Exception getting report id {1}: {0}".format(e, report_id))
         print(e)
         reject(e)
         return
