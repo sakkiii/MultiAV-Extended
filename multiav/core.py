@@ -158,7 +158,7 @@ class CDockerAvScanner():
     
     return ".".join(ip)
     
-  def scan(self, path, step_by_step_commands = True):
+  def scan(self, path, step_by_step_commands = False):
     try:
         # build request params
         filename = os.path.basename(path)
@@ -202,15 +202,19 @@ class CDockerAvScanner():
             if "rm:" in output:
               print("Could not cleanup file {0} from target container {1} on machine {2}".format("/malware/" + filename, self.container.id, self.container.machine.id))
         else:
-          # combine commands for faster execution, hide outs of copy and cleanup
-          copy_cmd = "docker cp {0} {1}:/malware/{2} > /dev/null 2>&1".format(path, self.container.id, filename)
-          scan_cmd = "docker exec {0} {2} --timeout 120 {1}".format(self.container.id, filename, self.binary_path)
-
           if self.container.machine.max_scans_per_container == 1:
-            #skip cleanup, container will be deleted anyway
-            cmd = " && ".join([copy_cmd, scan_cmd])
-            response = self.container.machine.execute_command(cmd)
+            # run and scan command only, container is removed post scan by docker
+            run_cmd = self.container.get_run_and_scan_command(filename)
+            response = self.container.machine.execute_command(run_cmd)
           else:
+            '''
+            e.g.
+            sudo docker cp /tmp/tmp_f5nzdm1 multiav-clamav-TEST:/malware/tmp_f5nzdm1 > /dev/null 2>&1; 
+            sudo docker exec multiav-clamav-TEST /bin/avscan /malware/tmp_f5nzdm1; 
+            sudo docker exec multiav-clamav-TEST rm /malware/tmp_f5nzdm1 > /dev/null 2>&1"
+            '''
+            copy_cmd = "docker cp {0} {1}:/malware/{2} > /dev/null 2>&1".format(path, self.container.id, filename)
+            scan_cmd = "docker exec {0} {2} --timeout 120 {1}".format(self.container.id, filename, self.binary_path)
             cleanup_cmd = "docker exec {0} rm /malware/{1} > /dev/null 2>&1".format(self.container.id, filename)
 
             cmd = " && ".join([copy_cmd, scan_cmd, cleanup_cmd])
