@@ -786,16 +786,17 @@ class DockerContainer():
         return cmd        
 
     def get_run_web_command(self):
+        network_name = self.network_internet_name if self.engine.container_requires_internet else self.network_no_internet_name
         cmd = "docker run -d --name {0} --net {1}$DOCKERPARAMS$ --rm malice/{2}:current$CMDARGS$ web".format(self.id, network_name, self.engine.container_name)
         return self._replace_run_command_variables(cmd)
 
-    def get_run_and_scan_command(self, file_to_scan)        
+    def get_run_and_scan_command(self, file_to_scan):
+        network_name = self.network_internet_name if self.engine.container_requires_internet else self.network_no_internet_name
         cmd = "docker run --name {0} --net {1}$DOCKERPARAMS$ --rm -v /tmp:/malware:ro malice/{2}:current$CMDARGS$ {3}".format(self.id, network_name, self.engine.container_name, file_to_scan)
         return self._replace_run_command_variables(cmd)
 
     def run(self):
         with self.machine._images_lock[self.engine.name].reader_lock:
-            network_name = self.network_internet_name if self.engine.container_requires_internet else self.network_no_internet_name
             cmd = self.get_run_web_command()
 
             # start
