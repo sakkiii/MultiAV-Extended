@@ -253,10 +253,13 @@ class DockerMachine():
         
         return container
     
-    def remove_container(self, container):
+    def remove_container(self, container):        
         # stop will also remove as the container is run with --rm flag
         with self._container_lock.writer_lock:
-            container.stop()
+            # no need to stop the container as docker already stops the container post scan
+            if self.max_scans_per_container != 1:
+                container.stop()
+            
             if container in self.containers:
                 self.containers.remove(container)
             return True

@@ -366,8 +366,8 @@ class AutoScaleDockerStrategy(ScannerStrategy):
                 engine.container.machine.remove_file_from_machine_tmp_dir(file_path)
             
             # remove / stop container if needed
-            #if self.max_scans_per_container != 1 and len(engine.container.scans) == 0:
-            #    engine.container.machine.remove_container(engine.container)
+            if self.max_scans_per_container == 1:
+                engine.container.machine.remove_container(engine.container)
             
         except Exception as e:
             print("_post_scan Exception: {0}".format(e))
