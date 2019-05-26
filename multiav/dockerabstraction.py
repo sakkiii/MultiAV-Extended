@@ -392,8 +392,9 @@ class LocalDynamicDockerMachine(DockerMachine):
                 container = self._create_container(engine, run_now=False)
                 self._container_lock.writer_lock.release()
 
-                if not container.run():
-                    raise Exception("Could not run container with engine {0} on machine {1}".format(engine.name, self.id))
+                if self.max_scans_per_container != 1:
+                    if not container.run():
+                        raise Exception("Could not run container with engine {0} on machine {1}".format(engine.name, self.id))
 
                 if not container.try_do_scan(file_path):
                     raise Exception("Could not add scan to newly created container with engine {0} on machine {1}".format(engine.name, self.id))
@@ -574,10 +575,7 @@ class DockerMachineMachine(DockerMachine):
                 container = self._create_container(engine, run_now=False)
                 self._container_lock.writer_lock.release()
 
-                # start container outside the lock context
-                if not container.run():
-                    raise Exception("Could not run container with engine {0} on machine {1}".format(engine.name, self.id))
-
+                # dont' start container now, will be only used once and therefore started on scan
                 if not container.try_do_scan(file_path):
                     raise Exception("Could not add scan to newly created container with engine {0} on machine {1}".format(engine.name, self.id))
                 
@@ -771,24 +769,36 @@ class DockerContainer():
                 scans.append((self, file_path))
         return scans
 
+    def _replace_run_command_variables(self, cmd):
+        # set docker parameters
+        if len(self.engine.container_run_docker_parameters) == 0:
+            cmd = cmd.replace("$DOCKERPARAMS$", "")
+        else:
+            cmd = cmd.replace("$DOCKERPARAMS$", " " + " ".join(
+                map(lambda kv: kv[0] + "=" + kv[1] if kv[1] != None else kv[0], self.engine.container_run_docker_parameters.items())))
+            
+        # set command arguments
+        if len(self.engine.container_run_command_arguments) == 0:
+            cmd = cmd.replace("$CMDARGS$", "")
+        else:
+            cmd = cmd.replace("$CMDARGS$", " " + " ".join(map(lambda kv: kv[0] + "=" + kv[1] if kv[1] != None else kv[0], self.engine.container_run_command_arguments.items())))
+        
+        return cmd        
+
+    def get_run_web_command(self):
+        network_name = self.network_internet_name if self.engine.container_requires_internet else self.network_no_internet_name
+        cmd = "docker run -d --name {0} --net {1}$DOCKERPARAMS$ --rm malice/{2}:current$CMDARGS$ web".format(self.id, network_name, self.engine.container_name)
+        return self._replace_run_command_variables(cmd)
+
+    def get_run_and_scan_command(self, file_to_scan):
+        network_name = self.network_internet_name if self.engine.container_requires_internet else self.network_no_internet_name
+        cmd = "docker run --name {0} --net {1}$DOCKERPARAMS$ --rm -v /tmp:/malware:ro malice/{2}:current$CMDARGS$ {3}".format(self.id, network_name, self.engine.container_name, file_to_scan)
+        return self._replace_run_command_variables(cmd)
+
     def run(self):
         with self.machine._images_lock[self.engine.name].reader_lock:
-            network_name = self.network_internet_name if self.engine.container_requires_internet else self.network_no_internet_name
-            cmd = "docker run -d --name {0} --net {1}$DOCKERPARAMS$ --rm malice/{2}:current$CMDARGS$ web".format(self.id, network_name, self.engine.container_name)
+            cmd = self.get_run_web_command()
 
-            # set docker parameters
-            if len(self.engine.container_run_docker_parameters) == 0:
-                cmd = cmd.replace("$DOCKERPARAMS$", "")
-            else:
-                cmd = cmd.replace("$DOCKERPARAMS$", " " + " ".join(
-                    map(lambda kv: kv[0] + "=" + kv[1] if kv[1] != None else kv[0], self.engine.container_run_docker_parameters.items())))
-                
-            # set command arguments
-            if len(self.engine.container_run_command_arguments) == 0:
-                cmd = cmd.replace("$CMDARGS$", "")
-            else:
-                cmd = cmd.replace("$CMDARGS$", " " + " ".join(map(lambda kv: kv[0] + "=" + kv[1] if kv[1] != None else kv[0], self.engine.container_run_command_arguments.items())))
-            
             # start
             try:
                 output = self.machine.execute_command(cmd)
