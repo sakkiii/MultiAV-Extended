@@ -60,12 +60,22 @@ class MultiAVClient:
             report_finished = "end_date" in report and report["end_date"] != None
 
             if not report_finished:
+              # test for scan complete manually
+              report_finished = True
+              for result in report["result"]:
+                if result["queued"] != 0 or result["scanning"] != 0:
+                  report_finished = False
+                  break
+
+            if not report_finished:
               # wait some seconds before requering
               #print("report not finished yet. rechecking in 5s...")
               time.sleep(5)
               continue
             
             resolve(report)
+            return
+
           except Exception as e:
             print("[MultiAVClient] Report id {1} query exception. Retrying in 5s... Exception: {0}".format(e, report_id))
             print(e)
