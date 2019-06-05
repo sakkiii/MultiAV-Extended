@@ -9,10 +9,10 @@ import datetime
 
 from rwlock import RWLock
 from promise import Promise
-from subprocess import check_output, CalledProcessError
-from threading import Event
+from subprocess import check_output, CalledProcessError, Popen, PIPE, STDOUT
+from threading import Event, Thread
 
-from multiav.exceptions import CreateDockerMachineMachineException
+from multiav.exceptions import CreateDockerMachineMachineException, StopDockerMachineMachineException
 from multiav.multiactionpromise import MultiActionPromise
 from multiav.promiseexecutorpool import PromiseExecutorPool
 from multiav.safeconfigparserextended import SafeConfigParserExtended
@@ -284,9 +284,10 @@ class AutoScaleDockerStrategy(ScannerStrategy):
         self.max_scans_per_container = max_scans_per_container
         print("AutoScaleDockerStrategy: initialized using min_machines: {0} max_machines: {1} max_containers_per_machine: {2} max_scans_per_container: {3}".format(min_machines, max_machines, max_containers_per_machine, max_scans_per_container))
 
-    def _execute_command(self, command):
+    def _execute_command(self, command, shell=False):
         try:
-            output = check_output(command.split(" "))
+            print("--execute command: {0}".format(command))
+            output = check_output(command.split(" "), shell=shell, stderr=STDOUT)
         except CalledProcessError as e:
             output = e.output
         
@@ -299,7 +300,38 @@ class AutoScaleDockerStrategy(ScannerStrategy):
         # [['multiav-test', '-', 'openstack', 'Running', 'tcp://10.0.0.51:2376', 'v18.09.3'], ...]
         return machines
 
+    def _start_malware_dir_watchdogs(self):
+        # check if in
+        cmd = "whereis inotifywait"
+        output = self._execute_command(cmd)
+        if not "/usr/bin" in output:
+            raise Exception("inotify-tools not installed. Please install using apt install inotify-tools")
+
+        def watcher_function(action):
+            if action == "create":
+                cmd = "inotifywait -mrq -e create --format %f /tmp/malware/ | while read FILE; do for DIR in $(ls --directory /tmp/multiav*); do cp /tmp/malware/$FILE $DIR/$FILE; done; done"
+            elif action == "delete":
+                cmd = "inotifywait -mrq -e delete --format %f /tmp/malware/ | while read FILE; do for DIR in $(ls --directory /tmp/multiav*); do rm $DIR/$FILE; done; done"
+            else:
+                return
+            
+            print("--execute command: {0}".format(cmd))
+            process = Popen(cmd,stdout=PIPE, shell=True)
+            proc_stdout = process.communicate()[0].strip()
+            if len(proc_stdout) != 0:
+                print(proc_stdout)
+
+        print("starting /tmp/malware dir watchdogs...")
+        for action in ["create", "delete"]:
+            t = Thread(target=watcher_function, args=(action,))
+            t.daemon = True
+            t.start()
+
     def _startup(self):
+        # remove /tmp/multiav-* directories (cleanup)
+        print("cleaning up /tmp/multiav-* directories...")
+        self._execute_command("rm -fr /tmp/multiav-*")
+        
         # check for running machines
         started_machine_counter = 0
         running_machines = self._list_docker_machines()
@@ -349,6 +381,19 @@ class AutoScaleDockerStrategy(ScannerStrategy):
                     print("could not create machine on first try. retrying now...")
                     if self._create_machine(never_shutdown=True) == None:
                         raise CreateDockerMachineMachineException()
+        
+        # stop machines bigger max
+        if machine_count > self.max_machines:
+            amount_of_machines_to_stop = machine_count - self.max_machines
+            print("stopping {0} machines due to max_machines requirement...".format(amount_of_machines_to_stop))
+            for i in range(0, amount_of_machines_to_stop):                
+                if not self._machines[-1].try_shutdown():
+                    print("could not stop machine {0} on first try. retrying now...".format(self._machines[-1].id))      
+                    if not self._machines[-1].try_shutdown():
+                        raise StopDockerMachineMachineException()
+
+        # start dir watchdogs
+        self._start_malware_dir_watchdogs()
 
     def _post_scan(self, engine, file_path):
         try:
@@ -360,10 +405,10 @@ class AutoScaleDockerStrategy(ScannerStrategy):
             engine.container.remove_scan(file_path)
 
             # remove scan from machine if required
-            print("checking if we need to cleanup the scan file {1} on the target machine {0}".format(file_path, engine.container.machine.id))
+            '''print("checking if we need to cleanup the scan file {1} on the target machine {0}".format(file_path, engine.container.machine.id))
             if len(engine.container.machine.find_scans_by_file_path(file_path)) == 0:
                 print("removing file {0} from machine {1} as its not used by a scan anymore".format(file_path, engine.container.machine.id))
-                engine.container.machine.remove_file_from_machine_tmp_dir(file_path)
+                engine.container.machine.remove_file_from_machine_tmp_dir(file_path)'''
             
             # remove / stop container if needed
             if self.max_scans_per_container == 1:
@@ -445,7 +490,7 @@ class AutoScaleDockerStrategy(ScannerStrategy):
             container, machine = m.try_do_scan(engine, file_path)
 
         # copy scan to target machine if required
-        machine.copy_file_to_machine_tmp_dir(file_path)
+        #machine.copy_file_to_machine_tmp_dir(file_path)
                 
         return container, reduce_scan_time_by
 

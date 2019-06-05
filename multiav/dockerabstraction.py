@@ -480,6 +480,9 @@ class DockerMachineMachine(DockerMachine):
         
         # do this manually as we may have to start the machine first
         if execute_startup_checks:
+            if not create_machine:
+                self.mount_shared_storage()
+            
             self.pull_all_containers()
             self.setup_networks()
             self.remove_running_containers()
@@ -533,6 +536,7 @@ class DockerMachineMachine(DockerMachine):
 
         # rise event
         if result:
+            self.mount_shared_storage()
             self._rise_event("machine_started", self)
         
         return result
@@ -547,7 +551,8 @@ class DockerMachineMachine(DockerMachine):
         # rise event
         if result:
             self._rise_event("shutdown", self)
-
+            self.umount_shared_storage()
+        
         return result
         
     def execute_command(self, command, call_super = False):
@@ -562,6 +567,28 @@ class DockerMachineMachine(DockerMachine):
             output = DockerMachine.execute_command(self, cmd)
 
         return output
+
+    def umount_shared_storage(self):
+        # remove dir 
+        self.execute_command("rm -fr /tmp/{0}".format(self.id), call_super=True)
+
+        # umount required? if so mount -u dev:/home/docker/foo foo
+        cmd = "docker-machine mount -u {0}:/tmp/malware /tmp/{0}".format(self.id)
+        self.execute_command(cmd, call_super=True)
+        return True
+
+    def mount_shared_storage(self):
+        # create dir in /tmp on manager
+        self.execute_command("mkdir /tmp/{0}".format(self.id), call_super=True)
+
+        # e.g. docker-machine mount multiav-0c309a7c-7e2a-11e9-b6fb-fa163e30c982:/tmp /tmp/multiav-0c309a7c-7e2a-11e9-b6fb-fa163e30c982/
+        cmd = "docker-machine mount {0}:/tmp/malware /tmp/{0}".format(self.id)
+
+        # are other machines running? if so copy all their files
+        output = self.execute_command(cmd, call_super=True)
+
+        # rise event
+        return not "Error" in output
 
     def try_do_scan(self, engine, file_path):
         try:
@@ -795,7 +822,7 @@ class DockerContainer():
 
     def get_run_and_scan_command(self, file_to_scan):
         network_name = self.network_internet_name if self.engine.container_requires_internet else self.network_no_internet_name
-        cmd = "docker run --name {0} --net {1}$DOCKERPARAMS$ --rm -v /tmp:/malware:ro malice/{2}:current$CMDARGS$ {3}".format(self.id, network_name, self.engine.container_name, file_to_scan)
+        cmd = "docker run --name {0} --net {1}$DOCKERPARAMS$ --rm -v /tmp/malware:/malware:ro malice/{2}:current$CMDARGS$ {3}".format(self.id, network_name, self.engine.container_name, file_to_scan)
         return self._replace_run_command_variables(cmd)
 
     def run(self):

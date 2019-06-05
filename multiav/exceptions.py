@@ -14,3 +14,7 @@ class CreateNetworkException(Exception):
 #-----------------------------------------------------------------------
 class CreateDockerMachineMachineException(Exception):
   pass
+
+#-----------------------------------------------------------------------
+class StopDockerMachineMachineException(Exception):
+  pass

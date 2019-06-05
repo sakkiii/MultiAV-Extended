@@ -546,6 +546,13 @@ class CMultiAV:
     else:
         raise InvalidScannerStrategyException("error invalid strategy")
         
+    # make sure /tmp/malware exists
+    if "No such file or directory" in self.scanner_strategy._execute_command("ls /tmp/malware"):
+        self.scanner_strategy._execute_command("mkdir /tmp/malware")
+    else:
+        # cleanup if existing
+        self.scanner_strategy._execute_command("rm /tmp/malware/*")
+
     # startup checks
     self.scanner_strategy.startup(self.engines)
 
@@ -631,7 +638,7 @@ class CMultiAV:
     return scan_promise
 
   def scan_buffer(self, buf, max_speed=AV_SPEED.ALL, allow_internet=False, event_handlers = dict()):
-    f = NamedTemporaryFile(delete=False)
+    f = NamedTemporaryFile(delete=False, dir="/tmp/malware")
     f.write(buf)
     f.close()
 
