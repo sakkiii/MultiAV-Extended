@@ -15,6 +15,7 @@ from threading import Event, Thread
 from multiav.exceptions import CreateDockerMachineMachineException, StopDockerMachineMachineException
 from multiav.multiactionpromise import MultiActionPromise
 from multiav.promiseexecutorpool import PromiseExecutorPool
+from multiav.parallelpromise import ParallelPromise
 from multiav.safeconfigparserextended import SafeConfigParserExtended
 from multiav.dockerabstraction import LocalStaticDockerMachine, LocalDynamicDockerMachine, DockerMachineMachine, DockerContainer, DockerMachine
 
@@ -375,11 +376,18 @@ class AutoScaleDockerStrategy(ScannerStrategy):
         if machine_count < self.min_machines:
             amount_of_machines_to_start = self.min_machines - machine_count
             print("starting {0} machines due to min_machines requirement now...".format(amount_of_machines_to_start))
+            start_promises = []
+
+            # start machines async
             for i in range(0, amount_of_machines_to_start):
-                if self._create_machine(never_shutdown=True) == None:
+                start_promises.append(self._create_machine_async(never_shutdown=True))
+            
+            # wait for machines to start
+            for promise in start_promises:
+                promise.wait()
+                if promise.is_rejected:
                     print("could not create machine on first try. retrying now...")
-                    if self._create_machine(never_shutdown=True) == None:
-                        raise CreateDockerMachineMachineException()
+                    raise CreateDockerMachineMachineException()
 
         # handle workers for possible newly detected machines
         with self._worker_lock.writer_lock:
@@ -410,7 +418,17 @@ class AutoScaleDockerStrategy(ScannerStrategy):
             
         except Exception as e:
             print("_post_scan Exception: {0}".format(e))
+    
+    def _create_machine_async(self, never_shutdown=False):
+        def promise_function(resolve, reject, never_shutdown):
+            machine = self._create_machine(never_shutdown)
+            if machine == None:
+                reject(CreateDockerMachineMachineException())
             
+            resolve(machine)
+
+        return ParallelPromise(lambda resolve,reject: promise_function(resolve, reject, never_shutdown))
+
     def _create_machine(self, never_shutdown=False):
             if len(self._machines) + 1 > self.max_machines:
                 print("create machine called but limit reached")
