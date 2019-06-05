@@ -38,9 +38,7 @@ class DockerMachine():
         self.max_scans_per_container = max_scans_per_container
 
         self._container_lock = RWLock()
-        self._filesystem_access_lock = RWLock()
-        self._copied_tmp_files = []
-
+        
         self._images_lock = dict(map(lambda engine: (engine.name, RWLock()), list(map(lambda engine_class: engine_class(self.cfg_parser), engine_classes))))
 
         self.containers = []
@@ -336,35 +334,6 @@ class DockerMachine():
             output = e.output
         
         return str(output.decode("utf-8"))
-
-    def copy_file_to_machine_tmp_dir(self, file_path):
-        with self._filesystem_access_lock.writer_lock:
-            local_filename = os.path.basename(file_path)
-            if local_filename in self._copied_tmp_files:
-                return True
-
-            '''ls_output = self.execute_command(self, "docker-machine ssh {0} ls {1}".format(machine.id, file_path), call_super=True)
-            if "No such file or directory" in ls_output:'''
-            #docker-machine scp [[user@]machine:][path] [[user@]machine:][path].
-            cmd = "docker-machine scp {0} {1}:/tmp/{2}".format(file_path, self.id, local_filename)
-            output = self.execute_command(cmd, call_super=True)
-        
-            if "scp: " in output: #error case
-                raise Exception("could not scp file to machine!")
-
-            self._copied_tmp_files.append(local_filename)
-            return True
-
-    def remove_file_from_machine_tmp_dir(self, file_path):
-        with self._filesystem_access_lock.writer_lock:
-            local_filename = os.path.basename(file_path)
-            if not local_filename in self._copied_tmp_files:
-                return True
-        
-            cmd = "docker-machine ssh {0} rm /tmp/{1}".format(self.id, local_filename)
-            output = self.execute_command(cmd, call_super=True)
-            self._copied_tmp_files.remove(local_filename)
-            return True
 
     def try_do_scan(self, engine, file_path):
         # abstract

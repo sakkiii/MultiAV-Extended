@@ -403,12 +403,6 @@ class AutoScaleDockerStrategy(ScannerStrategy):
             # remove scan from container
             print("_post_scan: removing scan {0} from container {1}".format(file_path, engine.container.id))
             engine.container.remove_scan(file_path)
-
-            # remove scan from machine if required
-            '''print("checking if we need to cleanup the scan file {1} on the target machine {0}".format(file_path, engine.container.machine.id))
-            if len(engine.container.machine.find_scans_by_file_path(file_path)) == 0:
-                print("removing file {0} from machine {1} as its not used by a scan anymore".format(file_path, engine.container.machine.id))
-                engine.container.machine.remove_file_from_machine_tmp_dir(file_path)'''
             
             # remove / stop container if needed
             if self.max_scans_per_container == 1:
@@ -488,9 +482,6 @@ class AutoScaleDockerStrategy(ScannerStrategy):
                 return self._get_container_for_scan(engine, file_path)
                 
             container, machine = m.try_do_scan(engine, file_path)
-
-        # copy scan to target machine if required
-        #machine.copy_file_to_machine_tmp_dir(file_path)
                 
         return container, reduce_scan_time_by
 
