@@ -534,9 +534,12 @@ class DockerMachineMachine(DockerMachine):
 
         result = "Docker is up and running!" in output
 
-        # rise event
         if result:
+            # create folder for samples on worker node
+            self.execute_command("mkdir /tmp/malware")
+
             self.mount_shared_storage()
+
             self._rise_event("machine_started", self)
         
         return result

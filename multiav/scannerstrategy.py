@@ -336,22 +336,32 @@ class AutoScaleDockerStrategy(ScannerStrategy):
         started_machine_counter = 0
         running_machines = self._list_docker_machines()
         for machine in running_machines:
-            # create instance for handling
+
             if len(machine) == 0:
                 continue
-
-            never_shutdown = started_machine_counter < self.min_machines
-            instance = DockerMachineMachine(self.cfg_parser, self.engine_classes, self.max_containers_per_machine, self.max_scans_per_container, create_machine = False, minimal_machine_run_time = self.minimal_machine_run_time, id_overwrite = machine[0], never_shutdown=never_shutdown)
 
             # descide what to do
             if not "Running" in machine:
                 print("detected running machine {0} in ERRORNEOUS state!".format(machine[0]))
+                instance = DockerMachineMachine(self.cfg_parser, self.engine_classes, self.max_containers_per_machine, self.max_scans_per_container, create_machine = False, execute_startup_checks = False, minimal_machine_run_time = self.minimal_machine_run_time, id_overwrite = machine[0], never_shutdown=False)
                 if not instance.try_shutdown():
                     print("tried to clean up machine {0} but failed. please clean up manually!".format(machine[0]))
-                    continue
+                    raise StopDockerMachineMachineException()
                 
                 print("machine {0} removed to regain a clean state...".format(machine[0]))
+            elif len(self._machines) >= self.max_machines:
+                # too many machines running
+                instance = DockerMachineMachine(self.cfg_parser, self.engine_classes, self.max_containers_per_machine, self.max_scans_per_container, create_machine = False, execute_startup_checks = False, minimal_machine_run_time = self.minimal_machine_run_time, id_overwrite = machine[0], never_shutdown=False)
+                if not instance.try_shutdown():
+                    print("tried to remove machine {0} (max_machines already satisified) but failed. please clean up manually!".format(machine[0]))
+                    raise StopDockerMachineMachineException()
+                
+                print("machine {0} removed as max_machines is already satisifed...".format(machine[0]))
             else:
+                # use it!
+                never_shutdown = started_machine_counter < self.min_machines
+                instance = DockerMachineMachine(self.cfg_parser, self.engine_classes, self.max_containers_per_machine, self.max_scans_per_container, create_machine = False, minimal_machine_run_time = self.minimal_machine_run_time, id_overwrite = machine[0], never_shutdown=never_shutdown)
+                instance.on("shutdown", self._on_machine_shutdown)
                 print("detected running machine {0} in operational state".format(machine[0]))
                 self._machines.append(instance)
                 started_machine_counter += 1
@@ -359,17 +369,6 @@ class AutoScaleDockerStrategy(ScannerStrategy):
         
         machine_count = len(self._machines)
         if machine_count != 0:
-            # handle workers for possible newly detected machines
-            with self._worker_lock.writer_lock:
-                current_worker_amount = self.pool.get_worker_amount()
-                required_workers_for_machines = machine_count * self.max_containers_per_machine * self.max_scans_per_container
-                required_workers_for_machines = self._max_workers if required_workers_for_machines > self._max_workers else required_workers_for_machines
-
-                workers_to_add = required_workers_for_machines - current_worker_amount
-                if workers_to_add > 0:
-                    print("increasing workers by {0} as {1} running machines were detected.".format(workers_to_add, machine_count))
-                    self.pool.add_worker(amount=workers_to_add)
-                
             print("readded {0} machines which were already runnning...".format(machine_count))
 
         # do we need to start machines to satisfy min_machines requirement?
@@ -381,16 +380,17 @@ class AutoScaleDockerStrategy(ScannerStrategy):
                     print("could not create machine on first try. retrying now...")
                     if self._create_machine(never_shutdown=True) == None:
                         raise CreateDockerMachineMachineException()
-        
-        # stop machines bigger max
-        if machine_count > self.max_machines:
-            amount_of_machines_to_stop = machine_count - self.max_machines
-            print("stopping {0} machines due to max_machines requirement...".format(amount_of_machines_to_stop))
-            for i in range(0, amount_of_machines_to_stop):                
-                if not self._machines[-1].try_shutdown():
-                    print("could not stop machine {0} on first try. retrying now...".format(self._machines[-1].id))      
-                    if not self._machines[-1].try_shutdown():
-                        raise StopDockerMachineMachineException()
+
+        # handle workers for possible newly detected machines
+        with self._worker_lock.writer_lock:
+            current_worker_amount = self.pool.get_worker_amount()
+            required_workers_for_machines = machine_count * self.max_containers_per_machine * self.max_scans_per_container
+            required_workers_for_machines = self._max_workers if required_workers_for_machines > self._max_workers else required_workers_for_machines
+
+            workers_to_add = required_workers_for_machines - current_worker_amount
+            if workers_to_add > 0:
+                print("increasing workers by {0} as {1} running machines were detected.".format(workers_to_add, machine_count))
+                self.pool.add_worker(amount=workers_to_add)
 
         # start dir watchdogs
         self._start_malware_dir_watchdogs()
