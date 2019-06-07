@@ -66,8 +66,16 @@ $def with (update_results)
             <td>$scanner_name</td>
             <td>$values['old_container_build_time']</td>
             <td>$values['old_signature_version']</td>
-            <td>$values['container_build_time']</td>
-            <td>$values['signature_version']</td>
+            $if values['old_container_build_time'] == values['container_build_time']:
+              <td>$values['container_build_time']</td>
+            $else:
+              <td style="color:green">$values['container_build_time']</td>
+
+            $if values['old_signature_version'] == values['signature_version']:
+              <td>$values['signature_version']</td>
+            $else:
+              <td style="color:green">$values['signature_version']</td>
+
             <td>
               $if values['status'] == "success":
                 <span style="color:green">&#x25cf; success</span>

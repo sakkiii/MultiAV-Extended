@@ -27,7 +27,7 @@ class MultiActionPromise(Promise):
                 self.do_reject(Exception("Failed: " + ", ".join(failed_promises)))
 
     def engine_then(self, did_fulfill=None, did_reject=None):
-        print(self._engine_promises)
+        #print(self._engine_promises)
         for engine, engine_promise in self._engine_promises.items():
             engine_promise.then(did_fulfill, did_reject)
 
