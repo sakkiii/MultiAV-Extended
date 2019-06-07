@@ -183,15 +183,16 @@ class CDockerAvScanner():
           current_try = 0
           while len(response) < len("{\"0\":0}") and current_try < 5:
             response = self.container.machine.execute_command(cmd)
+            response_json = response[:]
             
             # remove non json outputs (could be errors reported to stdout)
-            if response[0] != "{":
-              response = response[response.find("{"):]
-            if response[-1] != "}":
-              response = response[:response.rfind("}")+1]
+            if response_json[0] != "{":
+              response_json = response_json[response_json.find("{"):]
+            if response_json[-1] != "}":
+              response_json = response_json[:response_json.rfind("}")+1]
 
-            if len(response) < len("{\"0\":0}"):
-              print("[{0}] Scan response empty. trying again...".format(self.name))
+            if len(response_json) < len("{\"0\":0}"):
+              print("[{0}] Scan response contains no json string: Response: {1} - trying again...".format(self.name, response))
               current_try += 1
               time.sleep(2)
           
@@ -221,16 +222,17 @@ class CDockerAvScanner():
             response = self.container.machine.execute_command(cmd)
 
           # remove non json outputs (could be errors reported to stdout)
-          if response[0] != "{":
-            response = response[response.find("{"):]
-          if response[-1] != "}":
-            response = response[:response.rfind("}")+1]
+          response_json = response[:]
+          if response_json[0] != "{":
+            response_json = response_json[response_json.find("{"):]
+          if response_json[-1] != "}":
+            response_json = response_json[:response_json.rfind("}")+1]
         
         # dont try to deserialize if empty result
-        if len(response) < len("{\"0\":0}"):
-          raise Exception("no result")
+        if len(response_json) < len("{\"0\":0}"):
+          raise Exception("non json result: {0}".format(response))
 
-        response_obj = json.loads(response)
+        response_obj = json.loads(response_json)
         return self._normalize_results(response_obj)
     except Exception as e:
         print("[{0}] Container: {2} Exception in scan method: {1}".format(self.name, e, self.container.id))
