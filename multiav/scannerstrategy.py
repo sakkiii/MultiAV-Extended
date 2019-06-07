@@ -24,7 +24,7 @@ DOCKER_NETWORK_INTERNET_NAME = "multiav-internet-bridge"
   
 #-----------------------------------------------------------------------
 class ScannerStrategy:
-    def __init__(self, config_name, initial_scan_time_average = 70):
+    def __init__(self, config_name, initial_scan_time_average = 20):
         self._config_name = config_name
         self._event_subscribers = dict()
 
@@ -153,7 +153,7 @@ class ScannerStrategy:
 
 #-----------------------------------------------------------------------
 class LocalDockerStrategy(ScannerStrategy):
-    def __init__(self, config_name, initial_scan_time_average = 70):
+    def __init__(self, config_name, initial_scan_time_average = 20):
         ScannerStrategy.__init__(self, config_name, initial_scan_time_average)
         self.DOCKER_NETWORK_NO_INTERNET_NAME = DOCKER_NETWORK_NO_INTERNET_NAME
         self.DOCKER_NETWORK_INTERNET_NAME = DOCKER_NETWORK_INTERNET_NAME
@@ -203,7 +203,7 @@ class LocalDockerStrategy(ScannerStrategy):
 
 #-----------------------------------------------------------------------
 class LimitedLocalDockerStrategy(LocalDockerStrategy):
-    def __init__(self, config_name, num_threads, initial_scan_time_average = 70):
+    def __init__(self, config_name, num_threads, initial_scan_time_average = 20):
         LocalDockerStrategy.__init__(self, config_name, initial_scan_time_average)
 
         # use thread pool to handle overload without scaling
@@ -224,7 +224,7 @@ class LimitedLocalDockerStrategy(LocalDockerStrategy):
     
 #-----------------------------------------------------------------------
 class JustRunLocalDockerStrategy(LocalDockerStrategy):
-    def __init__(self, config_name, initial_scan_time_average = 70):
+    def __init__(self, config_name, initial_scan_time_average = 20):
         LocalDockerStrategy.__init__(self, config_name, initial_scan_time_average)
 
         # thread array, not limited in size
@@ -261,12 +261,16 @@ class JustRunLocalDockerStrategy(LocalDockerStrategy):
 
 #-----------------------------------------------------------------------       
 class AutoScaleDockerStrategy(ScannerStrategy):
-    def __init__(self, config_name, max_machines, max_containers_per_machine, max_scans_per_container, min_machines = 1, initial_scan_time_average = 70, expected_machine_startup_time = 130, minimal_machine_run_time = 480):
+    def __init__(self, config_name, max_machines, max_containers_per_machine, max_scans_per_container, min_machines = 1, initial_scan_time_average = 20, expected_machine_startup_time = 130, minimal_machine_run_time = 480):
         ScannerStrategy.__init__(self, config_name, initial_scan_time_average)
         # variables
         self.expected_machine_startup_time = expected_machine_startup_time
         self.minimal_machine_run_time = minimal_machine_run_time
         self.min_machines = min_machines
+
+        # sample copying to worker nodes
+        self._scanning_samples = dict()
+        self._workers_mounted_storage_lock = RWLock()
 
         # locks
         self._machine_lock = RWLock()
@@ -279,6 +283,7 @@ class AutoScaleDockerStrategy(ScannerStrategy):
         self.pool = PromiseExecutorPool(self._min_workers, self._max_workers)
         print("AutoScaleDockerStrategy: initialized thread pool using {0} threads (max: {1})".format(self._min_workers, self._max_workers))
 
+        # machine vars
         self._machines = []
         self.max_machines = max_machines
         self.max_containers_per_machine = max_containers_per_machine
@@ -300,33 +305,6 @@ class AutoScaleDockerStrategy(ScannerStrategy):
         machines = list(map(lambda x: list(filter(lambda q: q != "", str(x).split(" "))), response.split("\n")[1:]))
         # [['multiav-test', '-', 'openstack', 'Running', 'tcp://10.0.0.51:2376', 'v18.09.3'], ...]
         return machines
-
-    def _start_malware_dir_watchdogs(self):
-        # check if in
-        cmd = "whereis inotifywait"
-        output = self._execute_command(cmd)
-        if not "/usr/bin" in output:
-            raise Exception("inotify-tools not installed. Please install using apt install inotify-tools")
-
-        def watcher_function(action):
-            if action == "create":
-                cmd = "inotifywait -mrq -e create --format %f /tmp/malware/ | while read FILE; do for DIR in $(ls --directory /tmp/multiav*); do cp /tmp/malware/$FILE $DIR/$FILE; done; done"
-            elif action == "delete":
-                cmd = "inotifywait -mrq -e delete --format %f /tmp/malware/ | while read FILE; do for DIR in $(ls --directory /tmp/multiav*); do rm $DIR/$FILE; done; done"
-            else:
-                return
-            
-            print("--execute command: {0}".format(cmd))
-            process = Popen(cmd,stdout=PIPE, shell=True)
-            proc_stdout = process.communicate()[0].strip()
-            if len(proc_stdout) != 0:
-                print(proc_stdout)
-
-        print("starting /tmp/malware dir watchdogs...")
-        for action in ["create", "delete"]:
-            t = Thread(target=watcher_function, args=(action,))
-            t.daemon = True
-            t.start()
 
     def _startup(self):
         # remove /tmp/multiav-* directories (cleanup)
@@ -401,7 +379,7 @@ class AutoScaleDockerStrategy(ScannerStrategy):
                 self.pool.add_worker(amount=workers_to_add)
 
         # start dir watchdogs
-        self._start_malware_dir_watchdogs()
+        #self._start_malware_dir_watchdogs()
 
     def _post_scan(self, engine, file_path):
         try:
@@ -442,7 +420,13 @@ class AutoScaleDockerStrategy(ScannerStrategy):
                 print("starting new machine...")
                 machine = DockerMachineMachine(self.cfg_parser, self.engine_classes, self.max_containers_per_machine, self.max_scans_per_container, True, self.minimal_machine_run_time, execute_startup_checks=True, never_shutdown=never_shutdown)
                 machine.on("shutdown", self._on_machine_shutdown)
-                print("New machine {0} started!".format(machine.id))
+
+                print("New machine {0} started! Copying samples to machine now...".format(machine.id))
+
+                # copy active samples to machine        
+                with self._workers_mounted_storage_lock.writer_lock:
+                    for path_to_sample in self._scanning_samples:
+                        self._execute_command("cp -u {0} /tmp/{1}/".format(path_to_sample, machine.id))
 
                 with self._machine_lock.writer_lock:
                     self._machines.append(machine)
@@ -560,9 +544,32 @@ class AutoScaleDockerStrategy(ScannerStrategy):
         else:
             return queue_size * avg_scan_time / total_workers
 
+    def _post_engine_scan_sample_cleanup_check(self, path_to_sample):
+        with self._workers_mounted_storage_lock.writer_lock:
+            self._scanning_samples[path_to_sample] -= 1
 
-    def scan(self, engine, file_buffer):
-        scan_promise = self.pool.add_task(self._scan_internal, engine, file_buffer)
+            if self._scanning_samples[path_to_sample] == 0:
+                print("last scan finished for {0}. removing from machines now...".format(path_to_sample))
+                with self._machine_lock.reader_lock:
+                    for m in self._machines:
+                        self._execute_command("rm /tmp/{0}/{1}".format(m.id, os.path.basename(path_to_sample)))
+
+
+    def scan(self, engine, path_to_sample):
+        with self._workers_mounted_storage_lock.writer_lock:
+            if not path_to_sample in self._scanning_samples:
+                print("first scan for {0}. copying to machines now...".format(path_to_sample))
+                with self._machine_lock.reader_lock:
+                    for m in self._machines:
+                        self._execute_command("cp -u {0} /tmp/{1}/".format(path_to_sample, m.id))
+                self._scanning_samples[path_to_sample] = 1
+            else:
+                self._scanning_samples[path_to_sample] += 1
+
+
+        scan_promise = self.pool.add_task(self._scan_internal, engine, path_to_sample)
+        # schedule cleanup
+        scan_promise.then(lambda result: self._post_engine_scan_sample_cleanup_check(path_to_sample))
 
         # increase workforce if required and possible
         self._increase_workforce_if_possible()

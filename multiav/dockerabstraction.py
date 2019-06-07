@@ -505,7 +505,7 @@ class DockerMachineMachine(DockerMachine):
 
         if result:
             # create folder for samples on worker node
-            self.execute_command("mkdir /tmp/malware")
+            self.execute_command("mkdir /tmp/malware", dont_prepend_sudo=True)
 
             self.mount_shared_storage()
 
@@ -527,15 +527,19 @@ class DockerMachineMachine(DockerMachine):
         
         return result
         
-    def execute_command(self, command, call_super = False):
+    def execute_command(self, command, call_super = False, dont_prepend_sudo = False):
         # execute command
         if call_super:
             output = DockerMachine.execute_command(self, command)
         else:
             if command.find("&&") != -1:
                 command = "\"" + command + "\""
+
+            if dont_prepend_sudo:
+                cmd = "docker-machine ssh {0} {1}".format(self.id, command)
+            else:
+                cmd = "docker-machine ssh {0} sudo {1}".format(self.id, command)
             
-            cmd = "docker-machine ssh {0} sudo {1}".format(self.id, command)
             output = DockerMachine.execute_command(self, cmd)
 
         return output
