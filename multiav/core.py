@@ -333,7 +333,8 @@ class CPEScanMalicePlugin(CDockerAvScanner):
     self.speed = AV_SPEED.FAST
     self.plugin_type = PLUGIN_TYPE.FILE_FORMATS
     self.container_name = "pescan"
-    self.binary_path = "/usr/sbin/pescan scan"
+    self.binary_path = "/usr/sbin/pescan"
+    self.container_run_command_arguments["scan"] = None
     self.update_command_supported = False
 
 #-----------------------------------------------------------------------

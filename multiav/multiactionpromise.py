@@ -1,7 +1,6 @@
 from promise import Promise
 
 #-----------------------------------------------------------------------
-# this is basically a promise for the whole scan and for all subscans. use engine_then to setup the subtask callbacks
 class MultiActionPromise(Promise):
     def __init__(self, engine_promises=None):
         Promise.__init__(self)
