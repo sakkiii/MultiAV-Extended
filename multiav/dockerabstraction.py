@@ -1015,6 +1015,19 @@ class DockerContainer():
 
                 # run a container to get signature version
                 new_signature_version = self.get_signature_version()
+            else:
+                # no update supported, rename image only
+                try:
+                    with self.machine._images_lock[self.engine.name].writer_lock:
+                        if not self.retag("current", "old"):
+                            raise Exception("rename current to old failed")
+
+                        if not self.retag("latest", "current"):
+                            raise Exception("rename updated to current failed")
+                except Exception as e:
+                    print("[{0}] docker images / rmi exception {1}".format(self.engine.container_name, e))
+                    raise e
+
             return {
                 'engine': self.engine.name,
                 'status': "success",
