@@ -23,7 +23,7 @@ dl {
 }
 dt {
   float: left;
-  width: 10%;
+  width: 30%;
   padding: 0;
   margin: 0;
   font-weight:bold;
@@ -495,4 +495,18 @@ dd {
 
 .collapsable {
   cursor: pointer;
+}
+
+th.rotate {
+  /* Something you can count on */
+  height: 140px;
+  white-space: nowrap;
+  padding: 0px 0px;
+}
+
+th.rotate > div {
+  transform:
+    translate(0px, 51px)
+    rotate(270deg);
+  width: 20px;
 }

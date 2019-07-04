@@ -367,7 +367,6 @@ class CWindowsDefenderMalicePlugin(CDockerAvScanner):
     self.plugin_type = PLUGIN_TYPE.AV
     self.container_name = "windows-defender"
     self.container_run_docker_parameters["--security-opt"] = "seccomp=seccomp.json"
-    self.update_command_supported = False # temp disable as update seems to break av => segfault on scan
     self.container_additional_files.append("seccomp.json")
 
 #-----------------------------------------------------------------------

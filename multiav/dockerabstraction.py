@@ -19,9 +19,6 @@ from multiav.multiactionpromise import MultiActionPromise
 from multiav.exceptions import CreateNetworkException, PullPluginException, StartPluginException, CreateDockerMachineMachineException
 from multiav.parallelpromise import ParallelPromise
 
-DOCKER_NETWORK_NO_INTERNET_NAME_DEFAULT = "multiav-no-internet-bridge"
-DOCKER_NETWORK_INTERNET_NAME_DEFAULT = "multiav-internet-bridge"
-
 class DockerMachine():
     def __init__(self, cfg_parser, engine_classes, max_containers_per_machine, max_scans_per_container, id_overwrite = None, enable_startup_logic = True):
         if id_overwrite:
@@ -42,8 +39,8 @@ class DockerMachine():
         self._images_lock = dict(map(lambda engine: (engine.name, RWLock()), list(map(lambda engine_class: engine_class(self.cfg_parser), engine_classes))))
 
         self.containers = []
-        self.DOCKER_NETWORK_NO_INTERNET_NAME = self.cfg_parser.gets("MULTIAV", "DOCKER_NETWORK_NO_INTERNET_NAME", DOCKER_NETWORK_NO_INTERNET_NAME_DEFAULT)
-        self.DOCKER_NETWORK_INTERNET_NAME = self.cfg_parser.gets("MULTIAV", "DOCKER_NETWORK_INTERNET_NAME", DOCKER_NETWORK_INTERNET_NAME_DEFAULT)
+        self.DOCKER_NETWORK_NO_INTERNET_NAME = self.cfg_parser.get("MULTIAV", "DOCKER_NETWORK_NO_INTERNET_NAME")
+        self.DOCKER_NETWORK_INTERNET_NAME = self.cfg_parser.get("MULTIAV", "DOCKER_NETWORK_INTERNET_NAME")
 
         # starup logic
         if enable_startup_logic:
@@ -98,7 +95,6 @@ class DockerMachine():
         not_pulled = []
 
         pulled_images = self._list_current_images()
-
         for engine_class in self.engine_classes:
             # create instance
             engine = engine_class(self.cfg_parser)
@@ -171,7 +167,7 @@ class DockerMachine():
 
     def _create_container(self, engine, id_overwrite = None, run_now = False, disable_indexing=False):
         try:
-            container = DockerContainer(self, engine, self.max_scans_per_container, DOCKER_NETWORK_NO_INTERNET_NAME_DEFAULT, DOCKER_NETWORK_INTERNET_NAME_DEFAULT, id_overwrite = id_overwrite, run_now = run_now)
+            container = DockerContainer(self, engine, self.max_scans_per_container, self.DOCKER_NETWORK_NO_INTERNET_NAME, self.DOCKER_NETWORK_INTERNET_NAME, id_overwrite = id_overwrite, run_now = run_now)
 
             if not disable_indexing:
                 self._append_container_to_list(container)
@@ -184,6 +180,7 @@ class DockerMachine():
     def _list_current_images(self):
         cmd = "docker images --format \"{{.Repository}}\" malice/*:current"
         output = self.execute_command(cmd)
+        output = output.replace("\"", "")
         images = output.split("\n")
         return images
     
@@ -199,6 +196,11 @@ class DockerMachine():
         # [['malice/floss:latest','floss'], ...]
         containers = list(map(lambda x: list(filter(lambda q: q != '',x.split(" "))), output.split("\n")[1:]))
         return containers
+    
+    def _list_current_exported_images(self):
+        images_path = "/tmp"
+        images_identifier = "multiav-update-"
+        return [f[len(images_identifier):][:-4] for f in os.listdir(images_path) if images_identifier in f]
 
     def _get_engine_from_image_name(self, image_name):
         # normalize image name (remove tag)
@@ -317,8 +319,24 @@ class DockerMachine():
         update_promise.then(lambda res: post_update_cleanup_function())
 
         return update_promise
+    
+    def load_update_file(self, update_file, engine_name):
+        def _load_update_file_internal(resolve, reject, update_file, machine_id, engine_name):
+            try:
+                output = self.execute_command("docker load -i {0}".format(update_file))
+                if "Error" in output:
+                    raise Exception("docker load error: {0}".format(output))
+                resolve({
+                    "machine_id": machine_id,
+                    "engine_name": engine_name,
+                    "update_file": update_file,
+                    "date": str(datetime.datetime.now())})
+            except Exception as e:
+                reject(e)
+        
+        return ParallelPromise(lambda resolve, reject: _load_update_file_internal(resolve, reject, update_file, self.id, engine_name))
 
-    def execute_command(self, command, call_super = False):
+    def execute_command(self, command, call_super = False, shell=False):
         print("--execute command: " + command)
         '''try: 
             # close_fds=True ?
@@ -329,11 +347,70 @@ class DockerMachine():
             print("Exception while executing command: {0} response: {2} exception: {1}".format(command, e, response))
             return'''
         try:
-            output = check_output(command.split(" "), stderr=STDOUT)
+            if not shell:
+                command = command.split(" ")
+            
+            output = check_output(command, stderr=STDOUT, shell=shell)
         except CalledProcessError as e:
             output = e.output
         
         return str(output.decode("utf-8"))
+    
+    def export_images(self, output_file, engine_names):
+        def _export_images_internal(resolve, reject, output_file, engine_names):
+            try:
+                print("saving update images as {0} to disk now...".format(output_file))
+                images = " ".join(["malice/{0}:current".format(engine_name) for engine_name in engine_names])
+                output = self.execute_command("docker save {1} -o {0}".format(output_file, images), shell=True)
+
+                if "error" in output.lower():
+                    raise Exception("Update failed: Exception while saving images to disk: {0}".format(output))
+                
+                resolve({
+                    "machine_id": self.id,
+                    "engine_names": engine_names,
+                    "images": images,
+                    "date": datetime.datetime.now()
+                })
+            except Exception as e:
+                reject(e)
+            
+        return ParallelPromise(lambda resolve, reject: _export_images_internal(resolve, reject, output_file, engine_names))
+
+    def export_all_images(self):
+        print("Checking if all engines are exported and exporting them if required...")
+        export_promises = dict()
+        not_exported = []
+
+        exported_images = self._list_current_exported_images()
+        for engine_class in self.engine_classes:
+            # create instance
+            engine = engine_class(self.cfg_parser)
+
+            if engine.is_disabled():
+                continue
+            
+            if engine.container_name in exported_images:
+                #print("Container {0} already pulled on machine {1}".format(engine.name, self.id))
+                continue
+            
+            def export_failed_handler(engine_name):
+                not_exported.append(engine_name)
+                print("export of engine {0} failed!".format(engine_name))
+
+            export_promise = self.export_images("/tmp/multiav-update-{0}.tar".format(engine.container_name), [engine.container_name])
+            export_promise.then(None, lambda engine_name: export_failed_handler(engine_name))
+            export_promises[engine.name] = export_promise
+        
+        # wait for completion
+        for engine_name, promise in export_promises.items():
+            #print("waiting for promise {0}".format(engine_name))
+            promise.wait()
+
+        if len(not_exported) != 0:
+            raise Exception(" ".join(str(not_exported)))
+
+        print("All engines exported!")
 
     def try_do_scan(self, engine, file_path):
         # abstract
@@ -452,7 +529,7 @@ class DockerMachineMachine(DockerMachine):
             if not create_machine:
                 self.mount_shared_storage()
             
-            self.pull_all_containers()
+            self.copy_and_load_all_images()
             self.setup_networks()
             self.remove_running_containers()
 
@@ -565,6 +642,87 @@ class DockerMachineMachine(DockerMachine):
 
         # rise event
         return not "Error" in output
+
+    def copy_image_to_machine(self, engine_name, update_file):
+        def _copy_function(resolve, reject, machine, engine_name, update_file):
+            try:
+                # use docker-machine scp -d to copy deltas only (using rsync)
+                output = self.execute_command("docker-machine scp -d {0} {1}:{0}".format(update_file, machine.id), call_super=True)
+
+                if "Error" in output:
+                    raise Exception("SCP error: {0}".format(output))
+                
+                resolve({
+                    "machine_id": machine.id,
+                    "file": update_file,
+                    "engine_name": engine_name,
+                    "date": datetime.datetime.now()
+                })
+            except Exception as e:
+                reject(e)
+        
+        return ParallelPromise(lambda resolve, reject: _copy_function(resolve, reject, self, engine_name, update_file))
+
+    def copy_and_load_all_images(self, force_copy = False):        
+        print("Checking if all engines are copied to the machine and do so if required...")
+        promises = dict()
+        failed = []
+
+        def _copy_load(machine, resolve, reject, exported_image_path, engine):
+            try:
+                print("engine image file {0} not existent on worker {1}. copying now...".format(exported_image_path, machine.id))
+                copy_promise = self.copy_image_to_machine(engine.name, exported_image_path)
+                copy_promise.then(None, lambda err: _failed_handler(engine.name))
+                copy_promise.wait()
+                
+                print("engine image {0} not loaded on worker {1}. loading now...".format(engine.Name, machine.id))
+                load_promise = self.load_update_file(exported_image_path, engine.name)
+                load_promise.then(lambda res: resolve(res), lambda err: _failed_handler(engine.name))                
+            except Exception as e:
+                reject(e)        
+
+        loaded_images = self._list_current_images()
+        for engine_class in self.engine_classes:
+            # create instance
+            engine = engine_class(self.cfg_parser)
+
+            if engine.is_disabled():
+                continue
+            
+            if "malice/{0}".format(engine.container_name) in loaded_images:
+                #print("Container {0} already pulled on machine {1}".format(engine.name, self.id))
+                continue
+            
+            def _failed_handler(engine_name):
+                failed.append(engine_name)
+                print("copy of engine {0} failed!".format(engine_name))
+
+            exported_image_path = "/tmp/multiav-update-{0}.tar".format(engine.name)
+
+            # check if image is already copied to machine
+            promise = None
+            if "No such file or directory" in self.execute_command("ls {0}".format(exported_image_path)):
+                # file not on machine, copy and load
+                promise = ParallelPromise(lambda resolve, reject: _copy_load(self, resolve, reject, exported_image_path, engine))
+            else:
+                # file on machine: load
+                promise = self.load_update_file(exported_image_path, engine.name)
+
+            # handle pull errors
+            promise.then(None, lambda engine_name: _failed_handler(engine_name))
+            
+            # store promise in list
+            promises[engine.name] = promise
+        
+        # wait for completion
+        for engine_name, promise in promises.items():
+            #print("waiting for promise {0}".format(engine_name))
+            promise.wait()
+
+        if len(failed) != 0:
+            raise Exception(" ".join(str(failed)))
+
+        print("All engines copied and loaded!")
 
     def try_do_scan(self, engine, file_path):
         try:
@@ -762,10 +920,10 @@ class DockerContainer():
                         print(output)
                         return False
             
-            print("Update of plugin {0} on machine {1} successs!".format(self.engine.name, self.machine.id))
+            print("Pull of plugin {0} on machine {1} successs!".format(self.engine.name, self.machine.id))
             return True
         except Exception as e:
-            print("Update of plugin {0} on machine {1} failed! Exception: {2}".format(self.engine.name, self.machine.id, e))
+            print("Pull of plugin {0} on machine {1} failed! Exception: {2}".format(self.engine.name, self.machine.id, e))
             return False
 
     def find_scans_by_file_path(self, file_path):
@@ -932,7 +1090,7 @@ class DockerContainer():
     def update(self):
         def update_wrapper_function(resolve, reject):
             try:
-                resolve(json.dumps(self._update(), cls=EnumEncoder))
+                resolve(self._update())
             except Exception as e:
                 print("exception in update_function: {0}".format(e))
                 reject(e)
@@ -1030,7 +1188,8 @@ class DockerContainer():
 
             return {
                 'engine': self.engine.name,
-                'status': "success",
+                'container_name': self.engine.container_name,
+                'updated': "success",
                 'old_signature_version': old_signature_version,
                 'old_container_build_time': old_container_build_time,
                 'signature_version': new_signature_version,
@@ -1043,7 +1202,8 @@ class DockerContainer():
         except Exception as e:
             return {
                 'engine': self.engine.name,
-                'status': "error: {0}".format(e),
+                'container_name': self.engine.container_name,
+                'updated': "error: {0}".format(e),
                 'old_signature_version': old_signature_version,
                 'old_container_build_time': old_container_build_time,
                 'signature_version': new_signature_version,
