@@ -25,6 +25,11 @@ $def with (update_results)
       </div>
   </div>
   <div class="content">
+    <div class="actionmenu content">
+      <div class="actions">
+        <div style="float: right;font-size: 12px;"><input type="checkbox" checked onclick="toggle_refresh()" id="refreshtoggle"> Auto refresh</input></div>
+      </div>
+    </div>
   <div id="background" style="height:70px"></div>
     <h4 style="margin-top:40px">Plugin update results<small style="font-weight: normal;padding-left: 30px;">last refresh: $update_results["last_refresh"]</small></h4>
     <div>
@@ -97,8 +102,10 @@ $def with (update_results)
             $if update_results["is_auto_scale_strategy"] == True:
               $if values['exported'] == "-":  
                 <td>&#x25cf; -</td>
+                $ add_autorefresh = True
               $elif values['exported'] == "...":
                 <td style="color:orange">&#x25cf; ...</td>
+                $ add_autorefresh = True
               $elif values['exported'] == "error":
                 <td style="color:darkred">&#x25cf; error</td>
               $else:
@@ -124,10 +131,13 @@ $def with (update_results)
             $for engine_name, value in sorted(engine_dict.items()):
               $if value == "-":  
                 <td>-</td>
+                $ add_autorefresh = True
               $elif value == "scp":
                 <td style="color:orange">scp<td>
+                $ add_autorefresh = True
               $elif value == "load":
                 <td style="color:darkblue">load</td>
+                $ add_autorefresh = True
               $elif value == "error":
                 <td style="color:darkred">err</td>
               $else:
@@ -136,10 +146,21 @@ $def with (update_results)
       </table>
   </div>
   $if add_autorefresh:
-    <script>
-      setTimeout(function () {
+    <script>var enableRefresh = true;</script>
+  $else:
+    <script>var enableRefresh = false;</script>
+  
+  <script>
+    document.getElementById("refreshtoggle").checked = enableRefresh;
+  
+    function toggle_refresh(){
+      enableRefresh = !enableRefresh;
+    }
+  
+    setTimeout(function () {
+      if (enableRefresh)
         window.location.href = window.location.href;
-      }, 5000);
-    </script>
+    }, 5000);
+  </script>
 </body>
 </html>
