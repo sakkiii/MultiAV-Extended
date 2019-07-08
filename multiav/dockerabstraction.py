@@ -529,7 +529,7 @@ class DockerMachineMachine(DockerMachine):
             if not create_machine:
                 self.mount_shared_storage()
             
-            self.copy_and_load_all_images()
+            self.copy_and_load_all_images(force=create_machine)
             self.setup_networks()
             self.remove_running_containers()
 
@@ -653,7 +653,7 @@ class DockerMachineMachine(DockerMachine):
                     raise Exception("SCP error: {0}".format(output))
                 
                 resolve({
-                    "machine_id": machine.id,
+                    "machine": self,
                     "file": update_file,
                     "engine_name": engine_name,
                     "date": datetime.datetime.now()
@@ -663,7 +663,7 @@ class DockerMachineMachine(DockerMachine):
         
         return ParallelPromise(lambda resolve, reject: _copy_function(resolve, reject, self, engine_name, update_file))
 
-    def copy_and_load_all_images(self, force_copy = False):        
+    def copy_and_load_all_images(self, force=False):        
         print("Checking if all engines are copied to the machine and do so if required...")
         promises = dict()
         failed = []
@@ -675,7 +675,7 @@ class DockerMachineMachine(DockerMachine):
                 copy_promise.then(None, lambda err: _failed_handler(engine.name))
                 copy_promise.wait()
                 
-                print("engine image {0} not loaded on worker {1}. loading now...".format(engine.Name, machine.id))
+                print("engine image {0} not loaded on worker {1}. loading now...".format(engine.name, machine.id))
                 load_promise = self.load_update_file(exported_image_path, engine.name)
                 load_promise.then(lambda res: resolve(res), lambda err: _failed_handler(engine.name))                
             except Exception as e:
@@ -689,7 +689,7 @@ class DockerMachineMachine(DockerMachine):
             if engine.is_disabled():
                 continue
             
-            if "malice/{0}".format(engine.container_name) in loaded_images:
+            if not force and "malice/{0}".format(engine.container_name) in loaded_images:
                 #print("Container {0} already pulled on machine {1}".format(engine.name, self.id))
                 continue
             
@@ -697,7 +697,7 @@ class DockerMachineMachine(DockerMachine):
                 failed.append(engine_name)
                 print("copy of engine {0} failed!".format(engine_name))
 
-            exported_image_path = "/tmp/multiav-update-{0}.tar".format(engine.name)
+            exported_image_path = "/tmp/multiav-update-{0}.tar".format(engine.container_name)
 
             # check if image is already copied to machine
             promise = None
@@ -1064,7 +1064,7 @@ class DockerContainer():
         cmd = "docker run --rm --entrypoint cat malice/{0}:current /opt/malice/UPDATED".format(self.engine.container_name)
         output = self.machine.execute_command(cmd)
 
-        if "No such file or directory" in output or "No such container" in output:
+        if "No such file or directory" in output or "Unable to find image" in output:
             return "-"
         return output
     
@@ -1108,19 +1108,12 @@ class DockerContainer():
 
             # pull container
             if self.engine.update_pull_supported:
-                # remove old latest image
-                '''with self.machine._images_lock[self.engine.name].writer_lock:
-                    cmd = "docker rmi malice/{0}:latest".format(self.engine.container_name)
-                    output = self.machine.execute_command(cmd)
-                    if "Error" in output and not "No such image" in output:
-                        raise Exception("[{0}] Update failed. Could not remove old latest image!".format(self.engine.container_name))'''
-
                 # Check for docker image update on the store
-                if not self._pull(set_active=False):
+                if not self._pull():
                     print("[{0}] Update failed. Could not pull container!".format(self.engine.container_name))
                     raise Exception("pull failed")
                 
-                # Get container version info
+                # Get new container version info
                 new_container_version, new_container_build_time = self.get_container_version()
                
             if self.engine.update_command_supported:

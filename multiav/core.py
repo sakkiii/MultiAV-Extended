@@ -520,7 +520,6 @@ class CIkarusMalicePlugin(CDockerAvScanner):
     self.plugin_type = PLUGIN_TYPE.AV
     self.container_name = "ikarus"
     self.container_run_docker_parameters["--shm-size"] = "256m" # default is 64m. Bus error on scan if omitted
-    self.update_pull_supported = False
 
 #-----------------------------------------------------------------------
 class InvalidScannerStrategyException(Exception):

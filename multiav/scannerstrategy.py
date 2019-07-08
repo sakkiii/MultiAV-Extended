@@ -90,7 +90,7 @@ class ScannerStrategy:
                 scan_time = time.time() - start_time - reduce_scan_time_by
 
                 self._add_scan_time(scan_time)
-                print("[{0}] Scan time: {1}s seconds. New average: {2}s".format(engine.name, scan_time, self._get_average_scan_time()))
+                print("[{0}] Scan time: {1}s seconds(reduced by: {3}s). New average: {2}s".format(engine.name, scan_time, self._get_average_scan_time(), reduce_scan_time_by))
 
                 return res
         except Exception as e:
@@ -461,7 +461,7 @@ class AutoScaleDockerStrategy(ScannerStrategy):
     def _get_container_for_scan(self, engine, file_path):
         container = None
         machine = None
-        reduce_scan_time_by = False
+        reduce_scan_time_by = 0
 
         machine_count = len(self._machines)
 
@@ -525,8 +525,9 @@ class AutoScaleDockerStrategy(ScannerStrategy):
             
             # would require machine start. is it worth it? (calc worst case)
             time_to_finish_current_queue = self._calculate_time_to_finish_queue()
-            print("_increase_workforce_if_possible: time to finish queue {0} | queue_size: {1} average_scan_time: {2} worker_amount: {3}".format(time_to_finish_current_queue, queue_size, self._get_average_scan_time(), worker_amount))
-            if time_to_finish_current_queue < self.expected_machine_startup_time:
+            corrected_time_to_finish_queue = time_to_finish_current_queue - (len(self._machines_starting) * self.expected_machine_startup_time)
+            print("_increase_workforce_if_possible: time to finish queue {0} | queue_size: {1} average_scan_time: {2} worker_amount: {3} corrected_time_to_finish_queue: {4}".format(time_to_finish_current_queue, queue_size, self._get_average_scan_time(), worker_amount, corrected_time_to_finish_queue))
+            if corrected_time_to_finish_queue < self.expected_machine_startup_time:
                 # finishing the queue is faster than starting a new machine
                 print("_increase_workforce_if_possible: finishing queue without starting new machine is faster")
                 return
@@ -677,7 +678,7 @@ class AutoScaleDockerStrategy(ScannerStrategy):
                 update_promise["scp_to_workers_start_date"][machine][engine_name] = datetime.datetime.now()
                 scp_promises.append(machine.copy_image_to_machine(engine_name, export_file_name))
                 scp_promises[-1].then(
-                    lambda res: self._post_update_file_scp(update_promise, machine, engine_name, result, export_file_name),
+                    lambda res: self._post_update_file_scp(update_promise, engine_name, res, export_file_name),
                     lambda err: update_promise["scp_to_workers_promises"][machine].get_engine_promise(engine_name).do_reject(err)
                 )
         except Exception as e:
@@ -685,8 +686,13 @@ class AutoScaleDockerStrategy(ScannerStrategy):
             traceback.print_exc()
             update_promise["update_complete_promise"].do_reject(e)
     
-    def _post_update_file_scp(self, update_promise, machine, engine_name, result, export_file_name):
+    def _wait_for_update_start_event(self, update_promise):
+        self._update_start_event.wait()    
+        update_promise["worker_image_load_unlocked_promise"].do_resolve(datetime.datetime.now())
+
+    def _post_update_file_scp(self, update_promise, engine_name, result, export_file_name):
         try:
+            machine = result["machine"]
             print("_post_update_file_scp for engine {0} on machine {1}".format(engine_name, machine.id))
 
             update_promise["scp_to_workers_promises"][machine].get_engine_promise(engine_name).do_resolve(result)
@@ -694,7 +700,6 @@ class AutoScaleDockerStrategy(ScannerStrategy):
             # wait for update task to be executed by a worker => signals to start updating workers
             print("waiting for update start event...")
             self._update_start_event.wait()
-            update_promise["worker_image_load_started_promise"].do_resolve(datetime.datetime.now())
                 
             # load new image
             update_promise["worker_images_load_start_date"][machine][engine_name] = datetime.datetime.now()
@@ -789,7 +794,7 @@ class AutoScaleDockerStrategy(ScannerStrategy):
                 [MultiActionPromise(dict(zip(
                     active_engines, 
                     [Promise() for e in active_engines]))) for m in self._machines])),      # dict: [machine] = {engine: Promise()}
-            "worker_image_load_started_promise": Promise(),
+            "worker_image_load_unlocked_promise": Promise(),
             "worker_images_load_start_date": dict(zip(
                 [m for m in self._machines],
                 [dict(zip(
@@ -806,7 +811,11 @@ class AutoScaleDockerStrategy(ScannerStrategy):
         # add update task to queue => sets the event when called and blocks all other tasks
         self.pool.add_task(self._set_update_lock)
 
-        # start update mechanism async => we may have to wait for the lock        
+        # start lock watcher thread to resolve load_started_promise
+        lock_watcher_thread = threading.Thread(target=self._wait_for_update_start_event, args=(update_promise,))
+        lock_watcher_thread.start()
+
+        # start update mechanism async
         thread = threading.Thread(target=self._update_internal, args=(update_promise,))
         thread.start()
         

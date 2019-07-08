@@ -1011,6 +1011,11 @@ class update:
           "engine_names": [engine_name, ...],
           "images": images,
           "date": datetime.datetime.now()}'''
+      if isinstance(result, Exception):
+        print("webapi: exception in _post_engine_export result detected")
+        print(result)
+        return
+      
       print("webapi: export process finished: machine_id: {0} engine: {1}".format(result['machine_id'], " ".join(result['engine_names'])))
       for engine_name in result["engine_names"]:
         # set exported as ok
@@ -1042,7 +1047,7 @@ class update:
         print(result)
         return
       
-      print("webapi: scp process finished: machine_id: {0} engine: {1}".format(result['machine_id'], " ".join(result['engine_names'])))
+      print("webapi: scp process finished: machine_id: {0} engine: {1}".format(result['machine'].id, " ".join(result['engine_names'])))
 
       for engine_name in result['engine_names']:
         for machine_id in list(update_results['machine_results']):
@@ -1052,23 +1057,30 @@ class update:
             update_results['machine_results'][machine_id][engine_name] = "wait"
       
       # check if all promises are resolved
-      '''unresolved_promises = filter(lambda engine, data: data["exported"] == "scp", update_results["machine_results"].items())
-      if len(unresolved_promises) == 0:
+      all_resolved = True
+      for machine_id in list(update_results['machine_results']):
+        for engine_name in list(update_results['machine_results'][machine_id]):
+          if update_results['machine_results'][machine_id][engine_name] == "-":
+            all_resolved = False
+
+      if all_resolved:
         print("webapi: all scp promises fullfiled. setting scp_complete_date...")
-        update_results['scp_complete_date'] = datetime.datetime.now()'''
-    except Exception as e:
+        update_results['scp_complete_date'] = datetime.datetime.now()
+
+    except:
       print("webapi: _post_scp_to_workers EXCEPTION")
       print(result)
       traceback.print_exc()
     
-  def _worker_image_load_started(self, result):
+  def _worker_image_load_unlocked(self, result):
     try:
       for machine_id in list(update_results['machine_results']):
         for engine_name in list(update_results['machine_results'][machine_id]):
           if update_results['machine_results'][machine_id][engine_name] == "wait":
             update_results['machine_results'][machine_id][engine_name] = "load"
       
-      update_results["update_scan_lock"] = True
+      update_results['update_scan_lock'] = "set"
+      update_results['load_started_date'] = result
     except Exception as e:
       print("webapi: _worker_image_load_started EXCEPTION")
       traceback.print_exc()
@@ -1095,6 +1107,7 @@ class update:
   def _update_complete(self, result):
     try:
       update_results['end_date'] = datetime.datetime.now()
+      update_results["update_scan_lock"] = "unset"
       print("webapi: update complete")
     except Exception as e:
       print("webapi: _update_complete EXCEPTION")
@@ -1110,6 +1123,10 @@ class update:
     }
 
   def POST(self):
+    # check if update is already running / pending
+    if update_results["start_date"] != "-":
+      return self.GET()
+
     # Initialize data structure
     self._initialize_update_data_structure()
 
@@ -1121,10 +1138,11 @@ class update:
     update_promise = CAV.update()
 
     if update_results['is_auto_scale_strategy']:
-      update_results["update_scan_lock"] = False
+      update_results["update_scan_lock"] = "queue"
       update_results['engine_update_complete_date'] = "-"
       update_results['engine_export_complete_date'] = "-"
       update_results['scp_complete_date'] = "-"
+      update_results['load_started_date'] = "-"
       update_results['machine_results'] = dict()
 
       # update temp data structure with results
@@ -1151,9 +1169,9 @@ class update:
           lambda res: self._post_scp_to_workers(res),
           lambda res: self._post_scp_to_workers(res)
         )
-      # load started promise (hits when first image starts loading and is allowed to do so by the blocker task)
-      update_promise["worker_image_load_started_promise"].then(
-        lambda res: self._worker_image_load_started(res),
+      # load unlocked promise (hits when lock tasks is executed by the pool)
+      update_promise["worker_image_load_unlocked_promise"].then(
+        lambda res: self._worker_image_load_unlocked(res),
         None
       )
 
