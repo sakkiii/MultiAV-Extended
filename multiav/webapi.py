@@ -14,7 +14,8 @@ from multiprocessing import cpu_count
 
 from multiav.core import CMultiAV, AV_SPEED, PLUGIN_TYPE
 from multiav.enumencoder import EnumEncoder
-from multiav.scannerstrategy import JustRunLocalDockerStrategy, LimitedLocalDockerStrategy, AutoScaleDockerStrategy
+from multiav.safeconfigparserextended import SafeConfigParserExtended
+from multiav.scannerstrategy import LocalNoLimitDockerStrategy, LocalLimitDockerStrategy, AutoScaleDockerStrategy
 from multiav.exceptions import PullPluginException, StartPluginException, CreateNetworkException
 
 urls = (
@@ -37,6 +38,39 @@ CURRENT_PATH = os.getcwd()
 TEMPLATE_PATH = os.path.join(os.path.dirname(__file__), 'templates')
 
 # -----------------------------------------------------------------------
+# MultiAV Instance
+try:
+  config_name = "config.cfg"
+
+  # initialize config parser
+  parser = SafeConfigParserExtended()
+  parser.optionxform = str
+  parser.read(config_name)
+
+  # initialize correct scan strategy
+  scan_strategies = {
+    "local-no-limit": LocalNoLimitDockerStrategy,
+    "local-limit": LocalLimitDockerStrategy,
+    "auto-scale": AutoScaleDockerStrategy
+  }
+  scan_strategy = scan_strategies[parser.gets("MULTIAV", "SCAN_STRATEGY", "local-no-limit")](parser)
+
+  # initialize multiav instance
+  CAV = CMultiAV(scan_strategy, parser, auto_start=True, auto_pull=True)
+except PullPluginException as e:
+  print(e)
+  exit(2)
+except StartPluginException as e:
+  print(e)
+  exit(3)
+except CreateNetworkException as e:
+  print(e)
+  exit(4)
+
+if not os.path.isdir(os.path.join(CURRENT_PATH, 'static')):
+    raise Exception('runserver.py must be run in the directory {0}'.format(ROOT_PATH))
+ 
+# -----------------------------------------------------------------------
 class Singleton(type):
     _instances = {}
     def __call__(cls, *args, **kwargs):
@@ -44,6 +78,7 @@ class Singleton(type):
             cls._instances[cls] = super(Singleton, cls).__call__(*args, **kwargs)
         return cls._instances[cls]
 
+# -----------------------------------------------------------------------
 class CDbSamples():
   def __init__(self):
     self.db = web.database(dbn='sqlite', db='multiav.db')
@@ -356,25 +391,6 @@ class CDbSamples():
         engine_version=engine_version if engine_version is not None else "-")
 
     return updated_rows
-
-# -----------------------------------------------------------------------
-# MultiAV Instance
-try:
-  config_name = "config.cfg"
-  scanner_strategy = AutoScaleDockerStrategy(config_name)
-  CAV = CMultiAV(scanner_strategy, config_name, auto_start=True, auto_pull=True)
-except PullPluginException as e:
-  print(e)
-  exit(2)
-except StartPluginException as e:
-  print(e)
-  exit(3)
-except CreateNetworkException as e:
-  print(e)
-  exit(4)
-
-if not os.path.isdir(os.path.join(CURRENT_PATH, 'static')):
-    raise Exception('runserver.py must be run in the directory {0}'.format(ROOT_PATH))
 
 # -----------------------------------------------------------------------
 def convert_result_rows_to_ui_datastructure(rows):

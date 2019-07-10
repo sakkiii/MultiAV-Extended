@@ -527,7 +527,7 @@ class InvalidScannerStrategyException(Exception):
 
 # -----------------------------------------------------------------------
 class CMultiAV:
-  def __init__(self, scanner_strategy, cfg = "config.cfg", auto_pull = False, auto_start = False):
+  def __init__(self, scanner_strategy, config_parser, auto_pull = False, auto_start = False):
     self.engines = [CFileInfo, CWindowsDefenderMalicePlugin,
                     CSophosMalicePlugin, CAvastMalicePlugin, CAvgMalicePlugin,
                     CBitDefenderMalicePlugin, CClamAVMalicePlugin, CComodoMalicePlugin,
@@ -538,9 +538,8 @@ class CMultiAV:
                     CFlossMalicePlugin, CIkarusMalicePlugin]
 
     self.processes = cpu_count()
-    self.cfg = cfg
-    self.read_config()
-
+    self.parser = config_parser
+    
     # set scanner strategy
     if isinstance(scanner_strategy, ScannerStrategy):
         self.scanner_strategy = scanner_strategy
@@ -556,12 +555,6 @@ class CMultiAV:
 
     # startup checks
     self.scanner_strategy.startup(self.engines)
-
-  def read_config(self):
-    parser = SafeConfigParserExtended()
-    parser.optionxform = str
-    parser.read(self.cfg)
-    self.parser = parser
 
   def exec_func_multi_processes(self, object_list, func, args = None):
     q = Queue()

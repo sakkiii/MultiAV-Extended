@@ -19,16 +19,12 @@ from multiav.exceptions import CreateDockerMachineMachineException, StopDockerMa
 from multiav.multiactionpromise import MultiActionPromise
 from multiav.promiseexecutorpool import PromiseExecutorPool
 from multiav.parallelpromise import ParallelPromise
-from multiav.safeconfigparserextended import SafeConfigParserExtended
 from multiav.dockerabstraction import LocalStaticDockerMachine, LocalDynamicDockerMachine, DockerMachineMachine, DockerContainer, DockerMachine
   
 #-----------------------------------------------------------------------
 class ScannerStrategy:
-    def __init__(self, config_name):
-        self.cfg_parser = None
-        self._config_name = config_name
-        self._read_config()
-
+    def __init__(self, config_parser):
+        self.cfg_parser = config_parser
         self._event_subscribers = dict()
 
         # statistics in seconds
@@ -39,13 +35,6 @@ class ScannerStrategy:
         self._update_lock = RWLock()
         self._update_start_event = Event()
         self._update_finished_event = Event()
-
-    
-    def _read_config(self):
-        parser = SafeConfigParserExtended()
-        parser.optionxform = str
-        parser.read(self._config_name)
-        self.cfg_parser = parser
 
     def _add_scan_time(self, scan_time):
         with self._scan_time_lock.writer_lock:
@@ -161,8 +150,8 @@ class ScannerStrategy:
 
 #-----------------------------------------------------------------------
 class LocalDockerStrategy(ScannerStrategy):
-    def __init__(self, config_name):
-        ScannerStrategy.__init__(self, config_name)
+    def __init__(self, config_parser):
+        ScannerStrategy.__init__(self, config_parser)
         self.DOCKER_NETWORK_NO_INTERNET_NAME = self.cfg_parser.get("MULTIAV", "DOCKER_NETWORK_NO_INTERNET_NAME")
         self.DOCKER_NETWORK_INTERNET_NAME = self.cfg_parser.get("MULTIAV", "DOCKER_NETWORK_INTERNET_NAME")
         self.machine = None
@@ -210,12 +199,12 @@ class LocalDockerStrategy(ScannerStrategy):
         pass
 
 #-----------------------------------------------------------------------
-class LimitedLocalDockerStrategy(LocalDockerStrategy):
-    def __init__(self, config_name):
-        LocalDockerStrategy.__init__(self, config_name)
+class LocalLimitDockerStrategy(LocalDockerStrategy):
+    def __init__(self, config_parser):
+        LocalDockerStrategy.__init__(self, config_parser)
 
         # use thread pool to handle overload without scaling
-        self.worker_amount = int(self.cfg_parser.gets("MULTIAV","WORKER_AMOUNT", 8))
+        self.worker_amount = int(self.cfg_parser.gets("MULTIAV","MAX_CONTAINERS", 8))
         self.pool = PromiseExecutorPool(self.worker_amount)
         print("LocalDockerStrategy: initialized thread pool using {0} threads".format(self.worker_amount))
         
@@ -232,9 +221,9 @@ class LimitedLocalDockerStrategy(LocalDockerStrategy):
         return statistics
     
 #-----------------------------------------------------------------------
-class JustRunLocalDockerStrategy(LocalDockerStrategy):
-    def __init__(self, config_name):
-        LocalDockerStrategy.__init__(self, config_name)
+class LocalNoLimitDockerStrategy(LocalDockerStrategy):
+    def __init__(self, config_parser):
+        LocalDockerStrategy.__init__(self, config_parser)
 
         # thread array, not limited in size
         self.threads = []
@@ -270,8 +259,8 @@ class JustRunLocalDockerStrategy(LocalDockerStrategy):
 
 #-----------------------------------------------------------------------       
 class AutoScaleDockerStrategy(ScannerStrategy):
-    def __init__(self, config_name):
-        ScannerStrategy.__init__(self, config_name)
+    def __init__(self, config_parser):
+        ScannerStrategy.__init__(self, config_parser)
         # variables
         self.expected_machine_startup_time = int(self.cfg_parser.gets("MULTIAV", "EXPECTED_MACHINE_STARTUP_TIME", 130))
         self.minimal_machine_run_time = int(self.cfg_parser.gets("MULTIAV", "MINIMAL_MACHINE_RUN_TIME", 480))
