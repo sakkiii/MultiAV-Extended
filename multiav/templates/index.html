@@ -80,6 +80,7 @@ $def with (scanners, cpu_count, AV_SPEED)
     <p>MultiAV Plugin(s) Overview:</p>
     <table id="data" class="data-table">
         <tr>
+            <th></th>
             <th>Name</th>
             <th>Plugin type</th>
             <th>Speed</th>
@@ -89,7 +90,14 @@ $def with (scanners, cpu_count, AV_SPEED)
         </tr>
     $if len(scanners) != 0:
         $for scanner in sorted(scanners, key=lambda x: x["name"]):
-            <tr>
+            $ opacity = "1.0" if scanner["enabled"] else "0.5"
+            <tr style="opacity:$opacity">
+                <td style="text-align: center">
+                    $if scanner["enabled"]:
+                        <span style="color:green;font-weight:bold" title="Scanner enabled">&#x2713;</span>
+                    $else:
+                        <span style="color:red;font-weight:bold" title="Scanner disabled">&#x2613;</span>
+                </td>
                 <td>$scanner['name']</td>
                 <td>
                     $scanner["plugin_type"]

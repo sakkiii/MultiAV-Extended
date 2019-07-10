@@ -57,6 +57,8 @@ try:
 
   # initialize multiav instance
   CAV = CMultiAV(scan_strategy, parser, auto_start=True, auto_pull=True)
+
+  ENABLED_SCANNERS = CAV.get_scanners_state()
 except PullPluginException as e:
   print(e)
   exit(2)
@@ -724,6 +726,7 @@ class index:
       db_scanners = db.get_scanners().list()
 
     for scanner in db_scanners:
+      scanner["enabled"] = ENABLED_SCANNERS[scanner.name]
       scanner["speed"] = AV_SPEED(int(scanner["speed"])).name.lower().capitalize()
       scanner["plugin_type"] = PLUGIN_TYPE(int(scanner["plugin_type"])).name.lower().capitalize()
 

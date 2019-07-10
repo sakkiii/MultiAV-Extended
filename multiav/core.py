@@ -539,7 +539,7 @@ class CMultiAV:
 
     self.processes = cpu_count()
     self.parser = config_parser
-    
+
     # set scanner strategy
     if isinstance(scanner_strategy, ScannerStrategy):
         self.scanner_strategy = scanner_strategy
@@ -654,9 +654,22 @@ class CMultiAV:
     os.unlink(fname)
     print("unlinking complete")
   
+  def get_scanners_state(self):
+    scanners = {}
+    for engine_class in self.engines:
+      # create engine instance
+      engine = engine_class(self.parser)
+
+      scanners[engine.name] = not engine.is_disabled()
+    
+    return scanners
+  
   def get_scanners(self):
     scanners = {}
-    for engine in list(self.engines):
+    for engine_class in self.engines:
+      # create engine instance
+      engine = engine_class(self.parser)
+
       if engine.is_disabled():
         continue
 
