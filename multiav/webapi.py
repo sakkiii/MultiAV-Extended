@@ -4,7 +4,9 @@ import json
 import time
 import datetime
 import web
+import traceback
 
+from functools import reduce
 from rwlock import RWLock
 from hashlib import md5, sha1, sha256
 from itertools import groupby
@@ -12,7 +14,8 @@ from multiprocessing import cpu_count
 
 from multiav.core import CMultiAV, AV_SPEED, PLUGIN_TYPE
 from multiav.enumencoder import EnumEncoder
-from multiav.scannerstrategy import JustRunLocalDockerStrategy, LimitedLocalDockerStrategy, AutoScaleDockerStrategy
+from multiav.safeconfigparserextended import SafeConfigParserExtended
+from multiav.scannerstrategy import LocalNoLimitDockerStrategy, LocalLimitDockerStrategy, AutoScaleDockerStrategy
 from multiav.exceptions import PullPluginException, StartPluginException, CreateNetworkException
 
 urls = (
@@ -35,6 +38,41 @@ CURRENT_PATH = os.getcwd()
 TEMPLATE_PATH = os.path.join(os.path.dirname(__file__), 'templates')
 
 # -----------------------------------------------------------------------
+# MultiAV Instance
+try:
+  config_name = "config.cfg"
+
+  # initialize config parser
+  parser = SafeConfigParserExtended()
+  parser.optionxform = str
+  parser.read(config_name)
+
+  # initialize correct scan strategy
+  scan_strategies = {
+    "local-no-limit": LocalNoLimitDockerStrategy,
+    "local-limit": LocalLimitDockerStrategy,
+    "auto-scale": AutoScaleDockerStrategy
+  }
+  scan_strategy = scan_strategies[parser.gets("MULTIAV", "SCAN_STRATEGY", "local-no-limit")](parser)
+
+  # initialize multiav instance
+  CAV = CMultiAV(scan_strategy, parser, auto_start=True, auto_pull=True)
+
+  ENABLED_SCANNERS = CAV.get_scanners_state()
+except PullPluginException as e:
+  print(e)
+  exit(2)
+except StartPluginException as e:
+  print(e)
+  exit(3)
+except CreateNetworkException as e:
+  print(e)
+  exit(4)
+
+if not os.path.isdir(os.path.join(CURRENT_PATH, 'static')):
+    raise Exception('runserver.py must be run in the directory {0}'.format(ROOT_PATH))
+ 
+# -----------------------------------------------------------------------
 class Singleton(type):
     _instances = {}
     def __call__(cls, *args, **kwargs):
@@ -42,6 +80,7 @@ class Singleton(type):
             cls._instances[cls] = super(Singleton, cls).__call__(*args, **kwargs)
         return cls._instances[cls]
 
+# -----------------------------------------------------------------------
 class CDbSamples():
   def __init__(self):
     self.db = web.database(dbn='sqlite', db='multiav.db')
@@ -354,26 +393,6 @@ class CDbSamples():
         engine_version=engine_version if engine_version is not None else "-")
 
     return updated_rows
-
-# -----------------------------------------------------------------------
-# MultiAV Instance
-try:
-  overprovisioning_multiplyer=1
-  config_name = "config.cfg"
-  scanner_strategy = AutoScaleDockerStrategy(config_name, min_machines=2, max_machines = 5, max_containers_per_machine = cpu_count() * overprovisioning_multiplyer, max_scans_per_container = 1)
-  CAV = CMultiAV(scanner_strategy, config_name, auto_start=True, auto_pull=True)
-except PullPluginException as e:
-  print(e)
-  exit(2)
-except StartPluginException as e:
-  print(e)
-  exit(3)
-except CreateNetworkException as e:
-  print(e)
-  exit(4)
-
-if not os.path.isdir(os.path.join(CURRENT_PATH, 'static')):
-    raise Exception('runserver.py must be run in the directory {0}'.format(ROOT_PATH))
 
 # -----------------------------------------------------------------------
 def convert_result_rows_to_ui_datastructure(rows):
@@ -707,6 +726,7 @@ class index:
       db_scanners = db.get_scanners().list()
 
     for scanner in db_scanners:
+      scanner["enabled"] = ENABLED_SCANNERS[scanner.name]
       scanner["speed"] = AV_SPEED(int(scanner["speed"])).name.lower().capitalize()
       scanner["plugin_type"] = PLUGIN_TYPE(int(scanner["plugin_type"])).name.lower().capitalize()
 
@@ -951,13 +971,19 @@ class upload:
 
 # -----------------------------------------------------------------------
 update_results = {
-  "start_date": None,
-  "end_date": None,
+  "start_date": "-",
+  "end_date": "-",
+  "is_auto_scale_strategy": False,
   "last_refresh": None,
+  "update_scan_lock": None,
   "results": dict()
 }
+
 class update:
   def GET(self):
+    if update_results["start_date"] == "-" and update_results["end_date"] == "-":
+      return index().GET() 
+
     # show results
     render = web.template.render(TEMPLATE_PATH, globals={"sorted": sorted, "plugin_type_to_string": plugin_type_to_string})
     update_results['last_refresh'] = datetime.datetime.now()
@@ -966,19 +992,22 @@ class update:
   def _post_engine_update(self, result):
     try:
       scanner_name = result['engine']
-      print("update of {0} complete!".format(scanner_name))
+      print("webapi: update of {0} complete!".format(scanner_name))
 
       # store to temp object
-      update_results['results'][scanner_name] = result
+      if update_results['is_auto_scale_strategy']:
+        result["exported"] = "..."
+
+      update_results['results'][result['container_name']] = result
 
       # update db if required
-      update_successs = result['status'] != "error"      
+      update_successs = result['updated'] != "error"      
       if update_successs:
         plugin_type = result["plugin_type"]
         has_internet = result["has_internet"]
         signature_version = result["signature_version"]
         engine_version = result["signature_version"] if "signature_version" in result else "-"
-        speed = int(result["speed"])
+        speed = int(result["speed"].value)
 
         with CDbSamples() as db:
           db.update_scanner(
@@ -990,48 +1019,286 @@ class update:
             engine_version=engine_version)
         
     except Exception as e:
-      print("webapi: post engine update exception")
-      print(e)
+      print("webapi: _post_engine_update EXCEPTION")
+      traceback.print_exc()
 
-  def _post_update(self, result):
-    update_results['end_date'] = datetime.datetime.now()
-    print("update process finished")
+  def _post_all_engines_updated(self, result):
+    try:
+      update_results['engine_update_complete_date'] = datetime.datetime.now()
+      print("webapi: all engines updated")
+    except Exception as e:
+      print("webapi: _post_all_engines_updated EXCEPTION")
+      traceback.print_exc()
+  
+  def _post_engine_export(self, result):
+    try:
+      '''result = {
+          "machine_id": self.id,
+          "engine_names": [engine_name, ...],
+          "images": images,
+          "date": datetime.datetime.now()}'''
+      if isinstance(result, Exception):
+        print("webapi: exception in _post_engine_export result detected")
+        print(result)
+        return
+      
+      print("webapi: export process finished: machine_id: {0} engine: {1}".format(result['machine_id'], " ".join(result['engine_names'])))
+      for engine_name in result["engine_names"]:
+        # set exported as ok
+        update_results['results'][engine_name]["exported"] = "ok"
+        # set scp as ongoing
+        for machine_id in list(update_results['machine_results']):
+          update_results['machine_results'][machine_id][engine_name] = "scp"
+    except Exception as e:
+      print("webapi: _post_engine_export EXCEPTION")
+      traceback.print_exc()
+
+  def _post_all_engine_exported(self, result):
+    try:
+      update_results['engine_export_complete_date'] = datetime.datetime.now()
+      print("webapi: all engines exported")
+    except Exception as e:
+      print("webapi: _post_all_engine_exported EXCEPTION")
+      traceback.print_exc()
+
+  def _post_scp_to_workers(self, result):
+    try:
+      '''result = {
+          "machine_id": manager_machine.id,
+          "file": update_file,
+          "engine_names": [engine_name],
+          "date": datetime.datetime.now()}'''
+      if isinstance(result, Exception):
+        print("webapi: exception in scp_process result detected")
+        print(result)
+        return
+      
+      print("webapi: scp process finished: machine_id: {0} engine: {1}".format(result['machine'].id, " ".join(result['engine_names'])))
+
+      for engine_name in result['engine_names']:
+        for machine_id in list(update_results['machine_results']):
+          if update_results["update_scan_lock"]:
+            update_results['machine_results'][machine_id][engine_name] = "load"
+          else:
+            update_results['machine_results'][machine_id][engine_name] = "wait"
+      
+      # check if all promises are resolved
+      all_resolved = True
+      for machine_id in list(update_results['machine_results']):
+        for engine_name in list(update_results['machine_results'][machine_id]):
+          if update_results['machine_results'][machine_id][engine_name] == "-":
+            all_resolved = False
+
+      if all_resolved:
+        print("webapi: all scp promises fullfiled. setting scp_complete_date...")
+        update_results['scp_complete_date'] = datetime.datetime.now()
+
+    except:
+      print("webapi: _post_scp_to_workers EXCEPTION")
+      print(result)
+      traceback.print_exc()
+    
+  def _worker_image_load_unlocked(self, result):
+    try:
+      for machine_id in list(update_results['machine_results']):
+        for engine_name in list(update_results['machine_results'][machine_id]):
+          if update_results['machine_results'][machine_id][engine_name] == "wait":
+            update_results['machine_results'][machine_id][engine_name] = "load"
+      
+      update_results['update_scan_lock'] = "set"
+      update_results['load_started_date'] = result
+    except Exception as e:
+      print("webapi: _worker_image_load_started EXCEPTION")
+      traceback.print_exc()
+
+  def _post_worker_image_load(self, result):
+    try:
+      ''' result = {
+            "machine_id": machine_id,
+            "engine_name": engine_name,
+            "update_file": update_file,
+            "date": str(datetime.datetime.now())}'''
+      if isinstance(result, Exception):
+        print("webapi: exception in _post_worker_image_load result detected")
+        print(result)
+        return
+
+      print("webapi: image load finished: machine_id: {0} engine: {1}".format(result['machine_id'], result['engine_name']))
+      update_results['machine_results'][result['machine_id']][result['engine_name']] = "ok"
+      # no need to check if all promises are resolved => if so, update promise if resolved  
+    except Exception as e:
+      print("webapi: _post_worker_image_load EXCEPTION")
+      traceback.print_exc()
+
+  def _update_complete(self, result):
+    try:
+      update_results['end_date'] = datetime.datetime.now()
+      update_results["update_scan_lock"] = "unset"
+      print("webapi: update complete")
+    except Exception as e:
+      print("webapi: _update_complete EXCEPTION")
+      traceback.print_exc()
+
+  def _initialize_update_data_structure(self):
+    update_results = {
+      "start_date": "-",
+      "end_date": "-",
+      'is_auto_scale_strategy': False,
+      "last_refresh": None,
+      "results": dict()
+    }
 
   def POST(self):
+    # check if update is already running / pending
+    if update_results["start_date"] != "-" and update_results["end_date"] == "-":
+      return self.GET()
+
+    # Initialize data structure
+    self._initialize_update_data_structure()
+
     # Update
     update_results['start_date'] = datetime.datetime.now()
-    print("starting update of all containers...")
+    update_results['is_auto_scale_strategy'] = isinstance(CAV.scanner_strategy, AutoScaleDockerStrategy)
+    
+    print("wabapi: starting update of all containers...")
     update_promise = CAV.update()
 
-    # update temp data structure with results
-    update_promise.engine_then(
-      lambda res: self._post_engine_update(res),
-      lambda res: self._post_engine_update(res)
-    ).then(
-      lambda res: self._post_update(res),
-      lambda res: self._post_update(res)
-    )
+    if update_results['is_auto_scale_strategy']:
+      # AUTO SCALE STRATEGY UPDATE
+      update_results['engine_update_complete_date'] = "-"
+      update_results['engine_export_complete_date'] = "-"
+      update_results['scp_complete_date'] = "-"
+      update_results['load_started_date'] = "-"
+      update_results['update_scan_lock'] = "queue"
+      update_results['machine_results'] = dict()
 
-    # set initial data in temp data structure
-    for engine in update_promise.get_scanning_engines():
-      update_results["results"][engine.name] = {
-          'engine': engine.name,
-          'status': "updating...",
-          'old_signature_version': "...",
-          'old_container_build_time': "...",
-          'signature_version': "...",
-          'container_build_time': "...",
-          'plugin_type': engine.plugin_type,
-          'has_internet': engine.container_requires_internet,
-          'speed': engine.speed
-      }
+      # update temp data structure with results
+      update_promise["engine_update_promise"].engine_then(
+        lambda res: self._post_engine_update(res),
+        lambda res: self._post_engine_update(res)
+      ).then(
+        lambda res: self._post_all_engines_updated(res),
+        lambda res: self._post_all_engines_updated(res)
+      )
+
+      # export promises
+      update_promise["engine_export_promise"].engine_then(
+        lambda res: self._post_engine_export(res),
+        lambda res: self._post_engine_export(res)
+      ).then(
+        lambda res: self._post_all_engine_exported(res),
+        lambda res: self._post_all_engine_exported(res)
+      )
+
+      # scp promises
+      for worker, multi_action_promise in update_promise["scp_to_workers_promises"].items():
+        multi_action_promise.engine_then(
+          lambda res: self._post_scp_to_workers(res),
+          lambda res: self._post_scp_to_workers(res)
+        )
+      # load unlocked promise (hits when lock tasks is executed by the pool)
+      update_promise["worker_image_load_unlocked_promise"].then(
+        lambda res: self._worker_image_load_unlocked(res),
+        None
+      )
+
+      # load promises
+      for worker, multi_action_promise in update_promise["worker_images_load_promises"].items():
+        multi_action_promise.engine_then(
+          lambda res: self._post_worker_image_load(res),
+          lambda res: self._post_worker_image_load(res)
+        )
+
+      update_promise['update_complete_promise'].then(
+        lambda res: self._update_complete(res),
+        lambda res: self._update_complete(res)
+      )
+
+      # set initial data in temp data structure
+      for machine, engine_dict in update_promise["scp_to_workers_promises"].items():
+        update_results['machine_results'][machine.id] = dict()
+        for engine, values in engine_dict._engine_promises.items():
+          update_results['machine_results'][machine.id][engine.container_name] = "-"
+
+      for engine in update_promise["engine_update_promise"].get_scanning_engines():
+        update_results["results"][engine.container_name] = {
+            'engine': engine.name,
+            'updated': "...",
+            'exported': "-",
+            'old_signature_version': "...",
+            'old_container_build_time': "...",
+            'signature_version': "...",
+            'container_build_time': "...",
+            'plugin_type': engine.plugin_type,
+            'has_internet': engine.container_requires_internet,
+            'speed': engine.speed
+        }
+    elif isinstance(CAV.scanner_strategy, LocalNoLimitDockerStrategy):
+      update_results["update_scan_lock"] = "set"
+
+      # update temp data structure with results
+      update_promise.engine_then(
+        lambda res: self._post_engine_update(res),
+        lambda res: self._post_engine_update(res)
+      ).then(
+        lambda res: self._update_complete(res),
+        lambda res: self._update_complete(res)
+      )
+
+      for engine in update_promise.get_scanning_engines():
+        update_results["results"][engine.container_name] = {
+            'engine': engine.name,
+            'updated': "...",
+            'exported': "-",
+            'old_signature_version': "...",
+            'old_container_build_time': "...",
+            'signature_version': "...",
+            'container_build_time': "...",
+            'plugin_type': engine.plugin_type,
+            'has_internet': engine.container_requires_internet,
+            'speed': engine.speed
+        }
+    elif isinstance(CAV.scanner_strategy, LocalLimitDockerStrategy):
+      # update temp data structure with results
+      update_promise["engine_update_promise"].engine_then(
+        lambda res: self._post_engine_update(res),
+        lambda res: self._post_engine_update(res)
+      ).then(
+        lambda res: self._update_complete(res),
+        lambda res: self._update_complete(res)
+      )
+
+      # load unlocked promise (hits when lock tasks is executed by the pool)
+      def update_lock_state(state):
+        update_results['update_scan_lock'] = state
+      
+      update_promise["update_lock_set_promise"].then(
+        lambda res: update_lock_state("set"), None
+      )
+
+      update_results['update_scan_lock'] = "queue"
+      for engine in update_promise["engine_update_promise"].get_scanning_engines():
+        update_results["results"][engine.container_name] = {
+            'engine': engine.name,
+            'updated': "...",
+            'exported': "-",
+            'old_signature_version': "...",
+            'old_container_build_time': "...",
+            'signature_version': "...",
+            'container_build_time': "...",
+            'plugin_type': engine.plugin_type,
+            'has_internet': engine.container_requires_internet,
+            'speed': engine.speed
+        }
+      
+      print(update_results)
 
     return self.GET()
 
 # -----------------------------------------------------------------------
 class system:
   def GET(self):
-    statistics = scanner_strategy.get_statistics()
+    statistics = scan_strategy.get_statistics()
 
     statistics["cpu_count"] = cpu_count()
 

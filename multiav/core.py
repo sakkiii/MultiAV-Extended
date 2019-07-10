@@ -367,7 +367,6 @@ class CWindowsDefenderMalicePlugin(CDockerAvScanner):
     self.plugin_type = PLUGIN_TYPE.AV
     self.container_name = "windows-defender"
     self.container_run_docker_parameters["--security-opt"] = "seccomp=seccomp.json"
-    self.update_command_supported = False # temp disable as update seems to break av => segfault on scan
     self.container_additional_files.append("seccomp.json")
 
 #-----------------------------------------------------------------------
@@ -521,7 +520,6 @@ class CIkarusMalicePlugin(CDockerAvScanner):
     self.plugin_type = PLUGIN_TYPE.AV
     self.container_name = "ikarus"
     self.container_run_docker_parameters["--shm-size"] = "256m" # default is 64m. Bus error on scan if omitted
-    self.update_pull_supported = False
 
 #-----------------------------------------------------------------------
 class InvalidScannerStrategyException(Exception):
@@ -529,7 +527,7 @@ class InvalidScannerStrategyException(Exception):
 
 # -----------------------------------------------------------------------
 class CMultiAV:
-  def __init__(self, scanner_strategy, cfg = "config.cfg", auto_pull = False, auto_start = False):
+  def __init__(self, scanner_strategy, config_parser, auto_pull = False, auto_start = False):
     self.engines = [CFileInfo, CWindowsDefenderMalicePlugin,
                     CSophosMalicePlugin, CAvastMalicePlugin, CAvgMalicePlugin,
                     CBitDefenderMalicePlugin, CClamAVMalicePlugin, CComodoMalicePlugin,
@@ -540,8 +538,7 @@ class CMultiAV:
                     CFlossMalicePlugin, CIkarusMalicePlugin]
 
     self.processes = cpu_count()
-    self.cfg = cfg
-    self.read_config()
+    self.parser = config_parser
 
     # set scanner strategy
     if isinstance(scanner_strategy, ScannerStrategy):
@@ -558,12 +555,6 @@ class CMultiAV:
 
     # startup checks
     self.scanner_strategy.startup(self.engines)
-
-  def read_config(self):
-    parser = SafeConfigParserExtended()
-    parser.optionxform = str
-    parser.read(self.cfg)
-    self.parser = parser
 
   def exec_func_multi_processes(self, object_list, func, args = None):
     q = Queue()
@@ -663,9 +654,22 @@ class CMultiAV:
     os.unlink(fname)
     print("unlinking complete")
   
+  def get_scanners_state(self):
+    scanners = {}
+    for engine_class in self.engines:
+      # create engine instance
+      engine = engine_class(self.parser)
+
+      scanners[engine.name] = not engine.is_disabled()
+    
+    return scanners
+  
   def get_scanners(self):
     scanners = {}
-    for engine in list(self.engines):
+    for engine_class in self.engines:
+      # create engine instance
+      engine = engine_class(self.parser)
+
       if engine.is_disabled():
         continue
 

@@ -6,7 +6,10 @@ import os
 import time
 import random
 import datetime
+import traceback
+import copy
 
+from functools import reduce
 from rwlock import RWLock
 from promise import Promise
 from subprocess import check_output, CalledProcessError, Popen, PIPE, STDOUT
@@ -16,30 +19,24 @@ from multiav.exceptions import CreateDockerMachineMachineException, StopDockerMa
 from multiav.multiactionpromise import MultiActionPromise
 from multiav.promiseexecutorpool import PromiseExecutorPool
 from multiav.parallelpromise import ParallelPromise
-from multiav.safeconfigparserextended import SafeConfigParserExtended
 from multiav.dockerabstraction import LocalStaticDockerMachine, LocalDynamicDockerMachine, DockerMachineMachine, DockerContainer, DockerMachine
-
-DOCKER_NETWORK_NO_INTERNET_NAME = "multiav-no-internet-bridge"
-DOCKER_NETWORK_INTERNET_NAME = "multiav-internet-bridge"
   
 #-----------------------------------------------------------------------
 class ScannerStrategy:
-    def __init__(self, config_name, initial_scan_time_average = 20):
-        self._config_name = config_name
+    def __init__(self, config_parser):
+        self.cfg_parser = config_parser
         self._event_subscribers = dict()
 
-        # statistics in seconds
-        self.scan_time_average = (1, initial_scan_time_average)
-        self._scan_time_lock = RWLock()
-        self._get_average_scan_time()
+        self.max_scans_per_container = int(self.cfg_parser.gets("MULTIAV", "MAX_SCANS_PER_CONTAINER", 1))
 
-        self._read_config()
-    
-    def _read_config(self):
-        parser = SafeConfigParserExtended()
-        parser.optionxform = str
-        parser.read(self._config_name)
-        self.cfg_parser = parser
+        # statistics in seconds
+        self.scan_time_average = (1, int(self.cfg_parser.gets("MULTIAV", "INITIAL_SCAN_TIME_AVERAGE", 20)))
+        self._scan_time_lock = RWLock()
+
+        # update mechanism
+        self._update_lock = RWLock()
+        self._update_start_event = Event()
+        self._update_finished_event = Event()
 
     def _add_scan_time(self, scan_time):
         with self._scan_time_lock.writer_lock:
@@ -53,40 +50,55 @@ class ScannerStrategy:
             #print("_get_average_scan_time Sample Size: {0} Avg: {1}".format(self.scan_time_average[0], self.scan_time_average[1]))
             return int(self.scan_time_average[1])
 
+    def _set_update_lock(self):
+        with self._update_lock.writer_lock:
+            # signal update thread to start
+            self._update_start_event.set()
+
+            # wait for signal from update thread to release lock
+            self._update_finished_event.wait()
+        
+            # reset event objects
+            self._update_start_event.clear()
+            self._update_finished_event.clear()
+
     def _scan_internal(self, engine, file_buffer):
         try:
-            # measure scan time
-            start_time = time.time()
+            # acquire reader lock to prevent updates while scanning
+            with self._update_lock.reader_lock:
+                # measure scan time
+                start_time = time.time()
 
-            self._pre_scan(engine, file_buffer)
-            
-            # set container for scan
-            engine.container, reduce_scan_time_by = self._get_container_for_scan(engine, file_buffer)
+                self._pre_scan(engine, file_buffer)
+                
+                # set container for scan
+                engine.container, reduce_scan_time_by = self._get_container_for_scan(engine, file_buffer)
 
-            print("[{0}] Scanning {1} using {2} on container {3} on machine {4}".format(engine.name, file_buffer, engine.name, engine.container.id, engine.container.machine.id))
-            res = engine.scan(file_buffer)
+                print("[{0}] Scanning {1} using {2} on container {3} on machine {4}".format(engine.name, file_buffer, engine.name, engine.container.id, engine.container.machine.id))
+                res = engine.scan(file_buffer)
 
-            res["name"] = engine.name
-            res["plugin_type"] = engine.plugin_type.value
-            res["speed"] = engine.speed.value
-            res["has_internet"] = engine.container_requires_internet
-            
-            if "error" in res:
-                print("[{0}] Scan failed. Error: {1}".format(engine.name, res["error"]))
-            else:
-                print("[{0}] Scan complete.".format(engine.name))
-            
-            self._post_scan(engine, file_buffer)
-            
-            # measure scan time
-            scan_time = time.time() - start_time - reduce_scan_time_by
+                res["name"] = engine.name
+                res["plugin_type"] = engine.plugin_type.value
+                res["speed"] = engine.speed.value
+                res["has_internet"] = engine.container_requires_internet
+                
+                if "error" in res:
+                    print("[{0}] Scan failed. Error: {1}".format(engine.name, res["error"]))
+                else:
+                    print("[{0}] Scan complete.".format(engine.name))
+                
+                self._post_scan(engine, file_buffer)
+                
+                # measure scan time
+                scan_time = time.time() - start_time - reduce_scan_time_by
 
-            self._add_scan_time(scan_time)
-            print("[{0}] Scan time: {1}s seconds. New average: {2}s".format(engine.name, scan_time, self._get_average_scan_time()))
+                self._add_scan_time(scan_time)
+                print("[{0}] Scan time: {1}s seconds(reduced by: {3}s). New average: {2}s".format(engine.name, scan_time, self._get_average_scan_time(), reduce_scan_time_by))
 
-            return res
+                return res
         except Exception as e:
             print("[{0}] Scan internal error: {1}".format(engine.name, e))
+            traceback.print_exc()
             return {
                 "name": engine.name,
                 "error": "{0}".format(e),
@@ -117,8 +129,21 @@ class ScannerStrategy:
     def _pre_scan(self, engine, file_to_scan):
         self._rise_event("pre", file_to_scan, engine, file_to_scan)
 
-    def _post_scan(self, engine, file_to_scan):
-        self._rise_event("post", file_to_scan, engine, file_to_scan)
+    def _post_scan(self, engine, file_path):        
+        try:
+            self._rise_event("post", file_path, engine, file_path)
+
+            # remove scan from container
+            print("_post_scan: removing scan {0} from container {1}".format(file_path, engine.container.id))
+            engine.container.remove_scan(file_path)
+            
+            # remove / stop container if needed
+            if self.max_scans_per_container == 1:
+                engine.container.machine.remove_container(engine.container)
+            
+        except Exception as e:
+            print("_post_scan Exception: {0}".format(e))
+            traceback.print_exc()
 
     def startup(self, engines):
         self.engine_classes = []
@@ -127,6 +152,15 @@ class ScannerStrategy:
         
         self._startup()
     
+    def _execute_command(self, command, shell=False):
+        try:
+            print("--execute command: {0}".format(command))
+            output = check_output(command.split(" "), shell=shell, stderr=STDOUT)
+        except CalledProcessError as e:
+            output = e.output
+        
+        return str(output.decode("utf-8"))
+
     def _startup(self):
         # abstract
         pass
@@ -153,10 +187,10 @@ class ScannerStrategy:
 
 #-----------------------------------------------------------------------
 class LocalDockerStrategy(ScannerStrategy):
-    def __init__(self, config_name, initial_scan_time_average = 20):
-        ScannerStrategy.__init__(self, config_name, initial_scan_time_average)
-        self.DOCKER_NETWORK_NO_INTERNET_NAME = DOCKER_NETWORK_NO_INTERNET_NAME
-        self.DOCKER_NETWORK_INTERNET_NAME = DOCKER_NETWORK_INTERNET_NAME
+    def __init__(self, config_parser):
+        ScannerStrategy.__init__(self, config_parser)
+        self.DOCKER_NETWORK_NO_INTERNET_NAME = self.cfg_parser.get("MULTIAV", "DOCKER_NETWORK_NO_INTERNET_NAME")
+        self.DOCKER_NETWORK_INTERNET_NAME = self.cfg_parser.get("MULTIAV", "DOCKER_NETWORK_INTERNET_NAME")
         self.machine = None
 
     def _start_containers(self, engines):
@@ -167,23 +201,21 @@ class LocalDockerStrategy(ScannerStrategy):
             if not self.machine.create_container(engine):
                 return False
         return True
-    
-    def _startup(self):
-        self.machine = LocalStaticDockerMachine(self.cfg_parser, self.engine_classes, id_overwrite="localhost")
         
     def _get_container_for_scan(self, engine, file_to_scan):
         # search for a free spot on the local machine
         reduce_scan_time_by = 0
-        container = self.machine.try_do_scan(engine, file_to_scan)
+        container, machine = self.machine.try_do_scan(engine, file_to_scan)
 
         return container, reduce_scan_time_by
 
     def scan(self):
         # abstract
         pass
-
+    
     def update(self):
-        return self.machine.update()
+        # abstract
+        pass
 
     def get_signature_version(self, engine):
         containers = self.machine.find_containers_by_engine(engine)
@@ -202,48 +234,124 @@ class LocalDockerStrategy(ScannerStrategy):
         pass
 
 #-----------------------------------------------------------------------
-class LimitedLocalDockerStrategy(LocalDockerStrategy):
-    def __init__(self, config_name, num_threads, initial_scan_time_average = 20):
-        LocalDockerStrategy.__init__(self, config_name, initial_scan_time_average)
+class LocalLimitDockerStrategy(LocalDockerStrategy):
+    def __init__(self, config_parser):
+        LocalDockerStrategy.__init__(self, config_parser)
 
         # use thread pool to handle overload without scaling
-        self.pool = PromiseExecutorPool(num_threads)
-        print("LocalDockerStrategy: initialized thread pool using {0} threads".format(num_threads))
+        self.max_containers_per_machine = int(self.cfg_parser.gets("MULTIAV","MAX_CONTAINERS", 8))
+        self.worker_amount = self.max_containers_per_machine * self.max_scans_per_container
+        self.pool = PromiseExecutorPool(self.worker_amount)
+        print("LocalDockerStrategy: initialized thread pool using {0} threads".format(self.worker_amount))
         
+    def _startup(self):
+        self.machine = LocalDynamicDockerMachine(cfg_parser=self.cfg_parser, engine_classes=self.engine_classes, max_containers_per_machine=self.max_containers_per_machine, max_scans_per_container=self.max_scans_per_container, id_overwrite="localhost")
+
     def scan(self, plugin, file_buffer):
         scan_promise = self.pool.add_task(self._scan_internal, plugin, file_buffer)
         return scan_promise
 
+    def _update_internal(self, update_promise):
+        try:
+            # wait for signal that update lock is aquired
+            print("waiting for update start event...")
+            self._update_start_event.wait()
+
+            # update images
+            int_update_promise = self.machine.update()
+            
+            # update real promise        
+            int_update_promise.engine_then(
+                lambda res: update_promise["engine_update_promise"].get_engine_promise(res["container_name"]).do_resolve(res),
+                None
+            )
+
+            # signal lock thread to release update lock on update finish
+            int_update_promise.then(
+                lambda res: self._update_finished_event.set(),
+                lambda err: self._update_finished_event.set()
+            )
+        except:
+            print("_update_internal: EXCEPTION")
+            traceback.print_exc()
+
+    def _wait_for_update_start_event(self, update_promise):
+        self._update_start_event.wait()    
+        update_promise["update_lock_set_promise"].do_resolve(datetime.datetime.now())
+
+    def update(self):    
+        # add update task to queue => sets the event when called and blocks all other tasks
+        self.pool.add_task(self._set_update_lock)
+        
+        # create update promise
+        active_engines = [e(self.cfg_parser) for e in self.engine_classes if not e(self.cfg_parser).is_disabled()]
+        update_promise = {
+            "engine_update_promise": MultiActionPromise(dict(zip(
+                active_engines, 
+                [Promise() for e in active_engines]))),
+            "update_lock_set_promise": Promise()
+        }
+        
+        # start lock watcher thread to resolve load_started_promise
+        lock_watcher_thread = threading.Thread(target=self._wait_for_update_start_event, args=(update_promise,))
+        lock_watcher_thread.start()
+
+        # start update mechanism async
+        thread = threading.Thread(target=self._update_internal, args=(update_promise,))
+        thread.start()
+        
+        return update_promise
+
+    def _calculate_time_to_finish_queue(self):
+        queue_size = self.pool.get_queue_size_including_active_workers()
+        avg_scan_time = self._get_average_scan_time()
+        total_workers = self.pool.get_worker_amount()
+
+        return queue_size * avg_scan_time / total_workers
+
     def get_statistics(self):
         statistics = {
-            "strategy_name": "LimitedLocalDockerStrategy",
+            "strategy_name": "LocalLimitDockerStrategy",
+            "max_containers": self.max_containers_per_machine,
+            "max_scans_per_container": self.max_scans_per_container,
             "worker_threads": self.pool.get_worker_amount(),
-            "queue_size": self.pool.get_queue_size()
+            "worker_threads_working": len(self.pool.get_working_workers()),
+            "average_scan_time": self._get_average_scan_time(),
+            "queue_size": self.pool.get_queue_size(),
+            "time_to_finish_queue": self._calculate_time_to_finish_queue(),
+            "container_amount": len(self.machine.containers), 
+            "containers": list(map(lambda container: {
+                "id": container.id, 
+                "engine": container.engine.name, 
+                "scan_count": len(container.scans)
+                }, self.machine.containers)) if len(self.machine.containers) != 0 else "None"
         }
         return statistics
     
 #-----------------------------------------------------------------------
-class JustRunLocalDockerStrategy(LocalDockerStrategy):
-    def __init__(self, config_name, initial_scan_time_average = 20):
-        LocalDockerStrategy.__init__(self, config_name, initial_scan_time_average)
+class LocalNoLimitDockerStrategy(LocalDockerStrategy):
+    def __init__(self, config_parser):
+        LocalDockerStrategy.__init__(self, config_parser)
 
         # thread array, not limited in size
         self.threads = []
 
+    def _startup(self):
+        self.machine = LocalDynamicDockerMachine(cfg_parser=self.cfg_parser, engine_classes=self.engine_classes, max_containers_per_machine=-1, max_scans_per_container=self.max_scans_per_container, id_overwrite="localhost")
+
     def _scan_promise_wrapper(self, resolve, reject, engine, file_buffer):
         def fn():
             try:
-                res = self._scan_internal(engine, file_buffer)
+                with self._update_lock.reader_lock:
+                    res = self._scan_internal(engine, file_buffer)
+
                 resolve(json.dumps(res))
             except Exception as e:
                 print("[{1}] _scan_promise_wrapper exception: {0}".format(e, engine.name))
+                traceback.print_exc()
                 reject(e)
-            finally:
-                # make sure to remove thread from running list
-                self.threads.remove(thread)
         
         thread = threading.Thread(target=fn)
-        self.threads.append(thread)
         thread.start()
 
     def scan(self, plugin, file_buffer):
@@ -252,21 +360,73 @@ class JustRunLocalDockerStrategy(LocalDockerStrategy):
         )
         return scan_promise
 
+    def _update_internal(self, update_promise):
+        try:
+            # set update lock
+            thread = threading.Thread(target=self._set_update_lock)
+            thread.start()
+
+            # wait for signal that update lock is aquired
+            print("waiting for update start event...")
+            self._update_start_event.wait()
+
+            # update images
+            int_update_promise = self.machine.update()
+            
+            # update real promise        
+            int_update_promise.engine_then(
+                lambda res: update_promise.get_engine_promise(res["container_name"]).do_resolve(res),
+                None
+            )
+
+            # signal lock thread to release update lock on update finish
+            int_update_promise.then(
+                lambda res: self._update_finished_event.set(),
+                lambda err: self._update_finished_event.set()
+            )
+        except:
+            print("_update_internal: EXCEPTION")
+            traceback.print_exc()
+
+    def update(self):
+        active_engines = [e(self.cfg_parser) for e in self.engine_classes if not e(self.cfg_parser).is_disabled()]
+
+        update_promise = MultiActionPromise(dict(zip(
+            active_engines, 
+            [Promise() for e in active_engines])))
+        
+        # start update mechanism async
+        thread = threading.Thread(target=self._update_internal, args=(update_promise,))
+        thread.start()
+        
+        return update_promise
+
     def get_statistics(self):
         statistics = {
-            "strategy_name": "JustRunLocalDockerStrategy",
-            "worker_threads": len(self.threads)
+            "strategy_name": "LocalNoLimitDockerStrategy",
+            "max_scans_per_container": self.max_scans_per_container,
+            "worker_threads": len(self.threads),
+            "average_scan_time": self._get_average_scan_time(),
+            "container_amount": len(self.machine.containers), 
+            "containers": list(map(lambda container: {
+                "id": container.id, 
+                "engine": container.engine.name, 
+                "scan_count": len(container.scans)
+                }, self.machine.containers)) if len(self.machine.containers) != 0 else "None"
         }
         return statistics
 
 #-----------------------------------------------------------------------       
 class AutoScaleDockerStrategy(ScannerStrategy):
-    def __init__(self, config_name, max_machines, max_containers_per_machine, max_scans_per_container, min_machines = 1, initial_scan_time_average = 20, expected_machine_startup_time = 130, minimal_machine_run_time = 480):
-        ScannerStrategy.__init__(self, config_name, initial_scan_time_average)
+    def __init__(self, config_parser):
+        ScannerStrategy.__init__(self, config_parser)
         # variables
-        self.expected_machine_startup_time = expected_machine_startup_time
-        self.minimal_machine_run_time = minimal_machine_run_time
-        self.min_machines = min_machines
+        self.expected_machine_startup_time = int(self.cfg_parser.gets("MULTIAV", "EXPECTED_MACHINE_STARTUP_TIME", 130))
+        self.minimal_machine_run_time = int(self.cfg_parser.gets("MULTIAV", "MINIMAL_MACHINE_RUN_TIME", 480))
+        self.min_machines = int(self.cfg_parser.gets("MULTIAV", "MIN_MACHINES", 1))
+        self.max_machines = int(self.cfg_parser.gets("MULTIAV", "MAX_MACHINES", 1))
+        self.max_scans_per_container = int(self.cfg_parser.gets("MULTIAV", "MAX_SCANS_PER_CONTAINER", 1))
+        self.max_containers_per_machine = int(self.cfg_parser.gets("MULTIAV", "MAX_CONTAINERS_PER_MACHINE", 8))
 
         # sample copying to worker nodes
         self._scanning_samples = dict()
@@ -278,26 +438,14 @@ class AutoScaleDockerStrategy(ScannerStrategy):
         self._machines_starting = dict() # Event = amount of workers waiting
 
         # use thread pool to handle overload when maxed out scaling => tasks will stay in queue
-        self._min_workers = min_machines * max_containers_per_machine * max_scans_per_container
-        self._max_workers = max_machines * max_containers_per_machine * max_scans_per_container
+        self._min_workers = self.min_machines * self.max_containers_per_machine * self.max_scans_per_container
+        self._max_workers = self.max_machines * self.max_containers_per_machine * self.max_scans_per_container
         self.pool = PromiseExecutorPool(self._min_workers, self._max_workers)
         print("AutoScaleDockerStrategy: initialized thread pool using {0} threads (max: {1})".format(self._min_workers, self._max_workers))
 
         # machine vars
         self._machines = []
-        self.max_machines = max_machines
-        self.max_containers_per_machine = max_containers_per_machine
-        self.max_scans_per_container = max_scans_per_container
-        print("AutoScaleDockerStrategy: initialized using min_machines: {0} max_machines: {1} max_containers_per_machine: {2} max_scans_per_container: {3}".format(min_machines, max_machines, max_containers_per_machine, max_scans_per_container))
-
-    def _execute_command(self, command, shell=False):
-        try:
-            print("--execute command: {0}".format(command))
-            output = check_output(command.split(" "), shell=shell, stderr=STDOUT)
-        except CalledProcessError as e:
-            output = e.output
-        
-        return str(output.decode("utf-8"))
+        print("AutoScaleDockerStrategy: initialized using min_machines: {0} max_machines: {1} max_containers_per_machine: {2} max_scans_per_container: {3}".format(self.min_machines, self.max_machines, self.max_containers_per_machine, self.max_scans_per_container))
 
     def _list_docker_machines(self):
         cmd = "docker-machine ls"
@@ -311,11 +459,15 @@ class AutoScaleDockerStrategy(ScannerStrategy):
         print("cleaning up /tmp/multiav-* directories...")
         self._execute_command("rm -fr /tmp/multiav-*")
         
+        # check images on manager
+        manager_machine = DockerMachine(cfg_parser=self.cfg_parser, engine_classes=self.engine_classes, max_containers_per_machine=0, max_scans_per_container=0, id_overwrite=None,enable_startup_logic=False)
+        manager_machine.pull_all_containers()
+        manager_machine.export_all_images()
+
         # check for running machines
         started_machine_counter = 0
         running_machines = self._list_docker_machines()
         for machine in running_machines:
-
             if len(machine) == 0:
                 continue
 
@@ -380,22 +532,6 @@ class AutoScaleDockerStrategy(ScannerStrategy):
 
         # start dir watchdogs
         #self._start_malware_dir_watchdogs()
-
-    def _post_scan(self, engine, file_path):
-        try:
-            # call super class
-            ScannerStrategy._post_scan(self, engine, file_path)
-
-            # remove scan from container
-            print("_post_scan: removing scan {0} from container {1}".format(file_path, engine.container.id))
-            engine.container.remove_scan(file_path)
-            
-            # remove / stop container if needed
-            if self.max_scans_per_container == 1:
-                engine.container.machine.remove_container(engine.container)
-            
-        except Exception as e:
-            print("_post_scan Exception: {0}".format(e))
     
     def _create_machine_async(self, never_shutdown=False):
         def promise_function(resolve, reject, never_shutdown):
@@ -448,7 +584,7 @@ class AutoScaleDockerStrategy(ScannerStrategy):
     def _get_container_for_scan(self, engine, file_path):
         container = None
         machine = None
-        reduce_scan_time_by = False
+        reduce_scan_time_by = 0
 
         machine_count = len(self._machines)
 
@@ -484,6 +620,9 @@ class AutoScaleDockerStrategy(ScannerStrategy):
                 return self._get_container_for_scan(engine, file_path)
                 
             container, machine = m.try_do_scan(engine, file_path)
+
+            # add time reduction due to start
+            reduce_scan_time_by = self.expected_machine_startup_time
                 
         return container, reduce_scan_time_by
 
@@ -509,8 +648,9 @@ class AutoScaleDockerStrategy(ScannerStrategy):
             
             # would require machine start. is it worth it? (calc worst case)
             time_to_finish_current_queue = self._calculate_time_to_finish_queue()
-            print("_increase_workforce_if_possible: time to finish queue {0} | queue_size: {1} average_scan_time: {2} worker_amount: {3}".format(time_to_finish_current_queue, queue_size, self._get_average_scan_time(), worker_amount))
-            if time_to_finish_current_queue < self.expected_machine_startup_time:
+            corrected_time_to_finish_queue = time_to_finish_current_queue - (len(self._machines_starting) * self.expected_machine_startup_time)
+            print("_increase_workforce_if_possible: time to finish queue {0} | queue_size: {1} average_scan_time: {2} worker_amount: {3} corrected_time_to_finish_queue: {4}".format(time_to_finish_current_queue, queue_size, self._get_average_scan_time(), worker_amount, corrected_time_to_finish_queue))
+            if corrected_time_to_finish_queue < self.expected_machine_startup_time:
                 # finishing the queue is faster than starting a new machine
                 print("_increase_workforce_if_possible: finishing queue without starting new machine is faster")
                 return
@@ -611,35 +751,184 @@ class AutoScaleDockerStrategy(ScannerStrategy):
                         #print("check_if_this_engine_is_updated_on_all_machines: rejecting engine {0}".format(engine_name))
                         value_promise.do_reject(Exception("Update of {0} failed on {1} machines".format(engine_name, failed_promises)))
                     return
-                    
-    def update(self):
-        update_promises = dict()
 
-        # create placeholder promises for each engine. is resolved if updated on all machines
-        machine_update_promises = dict()
-        for engine_class in self.engine_classes:
-            engine = engine_class(self.cfg_parser)
+    def _post_engine_update(self, update_promise, manager_machine, result):
+        try:
+            engine_name = result["container_name"]
+            print("_post_engine_update for engine {0}".format(engine_name))
 
-            if engine.is_disabled():
-                continue
-            
-            machine_update_promises[engine.name] = []
-            update_promises[engine] = Promise(None)
-        
-        # create update promise
-        update_promise = MultiActionPromise(update_promises)
+            # resolve update promise for this engine
+            update_promise["engine_update_promise"].get_engine_promise(engine_name).do_resolve(result)
 
-        # call update on each machine
-        for machine in self._machines:
-            machine_update_promise = machine.update()
+            # export image
+            update_promise["engine_export_start_date"][engine_name] = datetime.datetime.now()
+            export_file_name = "/tmp/multiav-update-{0}.tar".format(engine_name)
 
-            # set callback post update to check if all engines on all machines are updated => if so, triggers resolve on update promise
-            for engine, engine_update_promise in machine_update_promise._engine_promises.items():
-                machine_update_promises[engine.name].append(engine_update_promise)
-                engine_update_promise.then(
-                    lambda result: self.check_if_this_engine_is_updated_on_all_machines(result, machine_update_promises, update_promise),
-                    lambda result: self.check_if_this_engine_is_updated_on_all_machines(result, machine_update_promises, update_promise),
+            export_image_promise = manager_machine.export_images(export_file_name, [engine_name])
+            export_image_promise.then(
+                lambda res: self._post_engine_export(update_promise, engine_name, manager_machine, res, export_file_name),
+                lambda err: update_promise["engine_export_promise"].get_engine_promise(engine_name).do_reject(err)
+            )
+        except Exception as e:
+            print("EXCEPTION: _post_engine_update")
+            traceback.print_exc()
+            update_promise["engine_export_promise"].get_engine_promise(engine_name).do_reject(e)
+            update_promise["update_complete_promise"].do_reject(e)
+
+    def _post_engine_export(self, update_promise, engine_name, manager_machine, result, export_file_name):
+        try:
+            print("_post_engine_export for engine {0}".format(engine_name))
+
+            # resolve export promise
+            update_promise["engine_export_promise"].get_engine_promise(engine_name).do_resolve(result)
+
+            # scp to workers
+            print("starting to copy update file {0} via scp to worker machines...".format(export_file_name))
+            scp_promises = list()
+            for machine in self._machines:
+                update_promise["scp_to_workers_start_date"][machine][engine_name] = datetime.datetime.now()
+                scp_promises.append(machine.copy_image_to_machine(engine_name, export_file_name))
+                scp_promises[-1].then(
+                    lambda res: self._post_update_file_scp(update_promise, engine_name, res, export_file_name),
+                    lambda err: update_promise["scp_to_workers_promises"][machine].get_engine_promise(engine_name).do_reject(err)
                 )
+        except Exception as e:
+            print("EXCEPTION: _post_engine_export: {0}".format(e))
+            traceback.print_exc()
+            update_promise["update_complete_promise"].do_reject(e)
+    
+    def _wait_for_update_start_event(self, update_promise):
+        self._update_start_event.wait()    
+        update_promise["worker_image_load_unlocked_promise"].do_resolve(datetime.datetime.now())
+
+    def _post_update_file_scp(self, update_promise, engine_name, result, export_file_name):
+        try:
+            machine = result["machine"]
+            print("_post_update_file_scp for engine {0} on machine {1}".format(engine_name, machine.id))
+
+            update_promise["scp_to_workers_promises"][machine].get_engine_promise(engine_name).do_resolve(result)
+
+            # wait for update task to be executed by a worker => signals to start updating workers
+            print("waiting for update start event...")
+            self._update_start_event.wait()
+                
+            # load new image
+            update_promise["worker_images_load_start_date"][machine][engine_name] = datetime.datetime.now()
+            print("starting update of engine {0} on worker machine {1}...".format(engine_name, machine.id))
+            image_load_promise = machine.load_update_file(export_file_name, engine_name)
+            image_load_promise.then(
+                lambda res: self._post_update_loaded(update_promise, machine, engine_name, res),
+                lambda err: update_promise["worker_images_load_promises"][machine].do_reject(err)
+            )
+        except Exception as e:
+            print("EXCEPTION: _post_update_file_scp: {0}".format(e))
+            traceback.print_exc()
+            update_promise["update_complete_promise"].do_reject(e)
+
+    def _post_update_loaded(self, update_promise, machine, engine_name, result):
+        try:
+            print("_post_update_loaded for engine {0} on machine {1}".format(engine_name, machine.id))
+            update_promise["worker_images_load_promises"][machine].get_engine_promise(engine_name).do_resolve(result)
+
+            # resolve if all done
+            pending_promises = list(filter(
+                lambda x: x._state == -1,
+                reduce(
+                    lambda x, y: x and y,
+                    [list(multi_action_promise._engine_promises.values()) for m, multi_action_promise in update_promise["worker_images_load_promises"].items()])))
+            if len(pending_promises) == 0:
+                print("_post_update_loaded: all worker_images_load_promises done. resolving update_complete_promise...")
+                # resolve update promise
+                update_promise["update_complete_date"] = datetime.datetime.now()
+                update_promise["update_complete_promise"].do_resolve(str(update_promise["update_complete_date"]))
+
+                # set event to signalize the update task to release the update lock (allows scans to execute again)
+                self._update_finished_event.set()
+            else:
+                print("_post_update_loaded: there are still some worker_images_load_promises pending..")
+        except Exception as e:
+            print("EXCEPTION: _post_update_loaded: {0}".format(e))
+            traceback.print_exc()
+            update_promise["update_complete_promise"].do_reject(e)
+
+    def _update_internal(self, update_promise):
+        try:
+            with self._machine_lock.reader_lock:
+                # create promise to do the update on the host
+                manager_machine = DockerMachine(cfg_parser=self.cfg_parser, engine_classes=self.engine_classes, max_containers_per_machine=0, max_scans_per_container=0, id_overwrite=None,enable_startup_logic=False)
+
+                # do engine updates on the manager machine
+                update_promise["engine_update_start_date"] = datetime.datetime.now()
+                print("starting update on manager machine...")
+                engine_update_promise = manager_machine.update()
+
+                # set up promises
+                engine_update_promise.engine_then(
+                    lambda res: self._post_engine_update(update_promise, manager_machine, res),
+                    lambda err: update_promise["engine_update_promise"]._engine_promises.get_engine_promise(err["container_name"]).do_reject(err)
+                )
+                engine_update_promise.then(
+                    lambda res: update_promise["engine_update_promise"].do_resolve(res),
+                    lambda err: update_promise["engine_update_promise"].do_reject(err)
+                )
+        except Exception as e:
+            print("EXCEPTION: _update_internal: {0}".format(e))
+            traceback.print_exc()
+            update_promise["update_complete_date"] = datetime.datetime.now()
+            update_promise["update_complete_promise"].do_reject(e)
+
+    
+    def update(self):
+        # create update promise structure to represent the current update state
+        # end dates are returned as promise result if resolved
+        active_engines = [e(self.cfg_parser) for e in self.engine_classes if not e(self.cfg_parser).is_disabled()]
+        update_promise = {
+            "update_start_date": None,
+            "update_complete_date": None,
+
+            "engine_update_promise": MultiActionPromise(dict(zip(
+                active_engines, 
+                [Promise() for e in active_engines]))),                                                         # dict: [engine] = Promise()
+            "engine_export_start_date": dict(zip(
+                    [engine.container_name for engine in active_engines], 
+                    [None for e in active_engines])),
+            "engine_export_promise": MultiActionPromise(dict(zip(
+                active_engines, 
+                [Promise() for e in active_engines]))),                                                         # dict: [engine] = Promise()
+            "scp_to_workers_start_date": dict(zip(
+                [m for m in self._machines],
+                [dict(zip(
+                    [engine.container_name for engine in active_engines], 
+                    [None for e in active_engines])) for m in self._machines])),
+            "scp_to_workers_promises": dict(zip(
+                [m for m in self._machines], 
+                [MultiActionPromise(dict(zip(
+                    active_engines, 
+                    [Promise() for e in active_engines]))) for m in self._machines])),      # dict: [machine] = {engine: Promise()}
+            "worker_image_load_unlocked_promise": Promise(),
+            "worker_images_load_start_date": dict(zip(
+                [m for m in self._machines],
+                [dict(zip(
+                    [engine.container_name for engine in active_engines],
+                    [None for e in active_engines])) for m in self._machines])),
+            "worker_images_load_promises": dict(zip(
+                [m for m in self._machines],
+                [MultiActionPromise(dict(zip(
+                    active_engines, 
+                    [Promise() for e in active_engines]))) for m in self._machines])),  # dict: [machine] = {engine: Promise()}
+            "update_complete_promise": Promise()
+        }
+        
+        # add update task to queue => sets the event when called and blocks all other tasks
+        self.pool.add_task(self._set_update_lock)
+
+        # start lock watcher thread to resolve load_started_promise
+        lock_watcher_thread = threading.Thread(target=self._wait_for_update_start_event, args=(update_promise,))
+        lock_watcher_thread.start()
+
+        # start update mechanism async
+        thread = threading.Thread(target=self._update_internal, args=(update_promise,))
+        thread.start()
         
         return update_promise
 

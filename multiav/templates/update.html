@@ -25,27 +25,48 @@ $def with (update_results)
       </div>
   </div>
   <div class="content">
+    <div class="actionmenu content">
+      <div class="actions">
+        <div style="float: right;font-size: 12px;"><input type="checkbox" checked onclick="toggle_refresh()" id="refreshtoggle"> Auto refresh</input></div>
+      </div>
+    </div>
   <div id="background" style="height:70px"></div>
     <h4 style="margin-top:40px">Plugin update results<small style="font-weight: normal;padding-left: 30px;">last refresh: $update_results["last_refresh"]</small></h4>
     <div>
       <dl style="padding-left: 0px; font-size:80%">
         <dt>State:</dt>
-        $if update_results["end_date"] == None:
+        $if update_results["end_date"] == "-":
           <dd><span style="color:orange">updating...</span></dd>
         $else:
           <dd><span style="color:green">update complete</span></dd>
 
         <dt>Start:</dt>
         <dd>$update_results["start_date"]</dd>
+        
+        $if update_results["is_auto_scale_strategy"] == True:
+          <dt>Engine Update complete:</dt>
+          <dd>$update_results["engine_update_complete_date"]</dd>
+          <dt>SCP complete:</dt>
+          <dd>$update_results["scp_complete_date"]</dd>          
+          <dt>Load started:</dt>
+          <dd>$update_results["load_started_date"]</dd>
+        
         <dt>End:</dt>
-        $ end_date = update_results["end_date"] if update_results["end_date"] != None else "-"
+        $ end_date = update_results["end_date"] if update_results["end_date"] != "-" else "-"
         <dd>$end_date</dd>
         <dt>Duration:</dt>
-        $if update_results["end_date"] == None:
+        $if update_results["end_date"] == "-":
           <dd>-</dd>
         $else:
           $ duration = update_results["end_date"]-update_results["start_date"]
           <dd>$duration</dd>
+        <dt>Update Lock</dt>
+        $if update_results["update_scan_lock"] == "set":
+          <dd style="color:darkgreen">Set - all upcoming scans wait for this update to finish</dd>
+        $elif update_results["update_scan_lock"] == "queue":
+          <dd style="color:darkred">In queue - system is performing scans added to the queue prior to the update start. Image load is waiting for those tasks to finish.</dd>
+        $else:
+          <dd style="color:darkgreen">Unset - system is performing scans normally.</dd>
       </ul>
       
       
@@ -59,11 +80,13 @@ $def with (update_results)
           <th>Old signature</th>
           <th>New container</th>
           <th>New signature</th>
-          <th>Update state</th>
+          <th>Updated</th>
+          $if update_results["is_auto_scale_strategy"]:
+            <th>Exported</th>
         </tr>
         $for scanner_name, values in sorted(update_results['results'].items()):
           <tr>
-            <td>$scanner_name</td>
+            <td>$values['engine']</td>
             <td>$values['old_container_build_time']</td>
             <td>$values['old_signature_version']</td>
             $if values['old_container_build_time'] == values['container_build_time']:
@@ -77,26 +100,76 @@ $def with (update_results)
               <td style="color:green">$values['signature_version']</td>
 
             <td>
-              $if values['status'] == "success":
-                <span style="color:green">&#x25cf; success</span>
-              $elif values['status'] == "error":
+              $if values['updated'] == "success":
+                <span style="color:green">&#x25cf; ok</span>
+              $elif values['updated'] == "error":
                 <span style="color:darkred">&#x25cf; error</span>
               $else:
-                <span style="color:orange">&#x25cf; $values['status']</span>
+                <span style="color:orange">&#x25cf; $values['updated']</span>
                 $ add_autorefresh = True
             </td>
+            $if update_results["is_auto_scale_strategy"]:
+              $if values['exported'] == "-":  
+                <td>&#x25cf; -</td>
+                $ add_autorefresh = True
+              $elif values['exported'] == "...":
+                <td style="color:orange">&#x25cf; ...</td>
+                $ add_autorefresh = True
+              $elif values['exported'] == "error":
+                <td style="color:darkred">&#x25cf; error</td>
+              $else:
+                <td style="color:green">&#x25cf; ok</td>
           </tr>
       $else:
         <tr>
           <td>-</td>
         </tr>
     </table>
+    
+    $if update_results["is_auto_scale_strategy"]:
+      <br />
+      <table border="0" class="data-table">
+        <tr>
+          <th style="vertical-align: bottom; background-color: white;">Machine</th>
+          $for scanner_name in sorted(list(update_results['results'])):
+            <th class="rotate"><div>$scanner_name</div></th>
+        </tr>
+        $for machine_id, engine_dict in update_results['machine_results'].items():
+          <tr>
+            <td>$machine_id</td>
+            $for engine_name, value in sorted(engine_dict.items()):
+              $if value == "-":  
+                <td>-</td>
+                $ add_autorefresh = True
+              $elif value == "scp":
+                <td style="color:orange">scp</td>
+                $ add_autorefresh = True
+              $elif value == "load":
+                <td style="color:darkblue">load</td>
+                $ add_autorefresh = True
+              $elif value == "error":
+                <td style="color:darkred">err</td>
+              $else:
+                <td style="color:green">$value</td>
+          </tr>
+      </table>
   </div>
   $if add_autorefresh:
-    <script>
-      setTimeout(function () {
+    <script>var enableRefresh = true;</script>
+  $else:
+    <script>var enableRefresh = false;</script>
+  
+  <script>
+    document.getElementById("refreshtoggle").checked = enableRefresh;
+  
+    function toggle_refresh(){
+      enableRefresh = !enableRefresh;
+    }
+  
+    setTimeout(function () {
+      if (enableRefresh)
         window.location.href = window.location.href;
-      }, 5000);
-    </script>
+    }, 5000);
+  </script>
 </body>
 </html>

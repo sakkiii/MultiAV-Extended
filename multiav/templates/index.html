@@ -31,7 +31,7 @@ $def with (scanners, cpu_count, AV_SPEED)
     <table style="width:100%;margin-top:50px">
     <tr>
         <td>
-            <p>Upload and scan files with the antivirus solutions listed below</p>
+            <p>Upload and scan files with the antivirus solutions listed below.</p>
             <form method="POST" enctype="multipart/form-data" action="/upload" class="dropzone" id="my-awesome-dropzone">
                 <div class="fallback">
                     <input type="file" name="file_upload" />
@@ -58,7 +58,7 @@ $def with (scanners, cpu_count, AV_SPEED)
                 </div>
             </div>
             <div id="scansettings" style="display:none">
-                <div class="toggle_checkbox" title="If checked, MultiAV will use plugins with internet access in the scan.">
+                <div class="toggle_checkbox" title="If checked, MultiAV uses plugins with internet access in the scan as well.">
                     <input type="checkbox" name="allowLeak"><span> Allow data leak to vendors</span>
                 </div>
                 <div>
@@ -77,9 +77,10 @@ $def with (scanners, cpu_count, AV_SPEED)
         </tr>
     </table>
 
-    <p>MultiAV Plugin(s) Overview:</p>
+    <p>Plugin(s) Overview:</p>
     <table id="data" class="data-table">
         <tr>
+            <th></th>
             <th>Name</th>
             <th>Plugin type</th>
             <th>Speed</th>
@@ -89,7 +90,14 @@ $def with (scanners, cpu_count, AV_SPEED)
         </tr>
     $if len(scanners) != 0:
         $for scanner in sorted(scanners, key=lambda x: x["name"]):
-            <tr>
+            $ opacity = "1.0" if scanner["enabled"] else "0.5"
+            <tr style="opacity:$opacity">
+                <td style="text-align: center">
+                    $if scanner["enabled"]:
+                        <span style="color:green;font-weight:bold" title="Scanner enabled">&#x2713;</span>
+                    $else:
+                        <span style="color:red;font-weight:bold" title="Scanner disabled">&#x2613;</span>
+                </td>
                 <td>$scanner['name']</td>
                 <td>
                     $scanner["plugin_type"]
@@ -99,7 +107,7 @@ $def with (scanners, cpu_count, AV_SPEED)
                 <td>$scanner['signature_version']</td>
                 <td>
                 $if scanner["has_internet"] == 1:
-                    <span style="color:red">&#x25cf; enabled</span>
+                    <span style="color:red" title="WARNING: Sample could leak to this vendor!">&#x25cf; enabled</span>
                 $else:
                     <span style="color:green">&#x25cf; disabled</span>
                 </td>
