@@ -47,15 +47,7 @@ $def with (update_results)
           <dt>Engine Update complete:</dt>
           <dd>$update_results["engine_update_complete_date"]</dd>
           <dt>SCP complete:</dt>
-          <dd>$update_results["scp_complete_date"]</dd>
-          <dt>Update Lock</dt>
-          $if update_results["update_scan_lock"] == "set":
-            <dd style="color:darkgreen">Set - all queued scans wait for this update to finish</dd>
-          $elif update_results["update_scan_lock"] == "queue":
-            <dd style="color:darkred">In queue - system is performing scans added to the queue prior to the update start. Image load is waiting for those tasks to finish.</dd>
-          $else:
-            <dd style="color:darkgreen">Unset - system is performing scans normally.</dd>
-          
+          <dd>$update_results["scp_complete_date"]</dd>          
           <dt>Load started:</dt>
           <dd>$update_results["load_started_date"]</dd>
         
@@ -68,6 +60,13 @@ $def with (update_results)
         $else:
           $ duration = update_results["end_date"]-update_results["start_date"]
           <dd>$duration</dd>
+        <dt>Update Lock</dt>
+        $if update_results["update_scan_lock"] == "set":
+          <dd style="color:darkgreen">Set - all upcoming scans wait for this update to finish</dd>
+        $elif update_results["update_scan_lock"] == "queue":
+          <dd style="color:darkred">In queue - system is performing scans added to the queue prior to the update start. Image load is waiting for those tasks to finish.</dd>
+        $else:
+          <dd style="color:darkgreen">Unset - system is performing scans normally.</dd>
       </ul>
       
       
@@ -82,7 +81,7 @@ $def with (update_results)
           <th>New container</th>
           <th>New signature</th>
           <th>Updated</th>
-          $if update_results["is_auto_scale_strategy"] == True:
+          $if update_results["is_auto_scale_strategy"]:
             <th>Exported</th>
         </tr>
         $for scanner_name, values in sorted(update_results['results'].items()):
@@ -109,7 +108,7 @@ $def with (update_results)
                 <span style="color:orange">&#x25cf; $values['updated']</span>
                 $ add_autorefresh = True
             </td>
-            $if update_results["is_auto_scale_strategy"] == True:
+            $if update_results["is_auto_scale_strategy"]:
               $if values['exported'] == "-":  
                 <td>&#x25cf; -</td>
                 $ add_autorefresh = True
@@ -127,7 +126,7 @@ $def with (update_results)
         </tr>
     </table>
     
-    $if update_results["is_auto_scale_strategy"] == True:
+    $if update_results["is_auto_scale_strategy"]:
       <br />
       <table border="0" class="data-table">
         <tr>

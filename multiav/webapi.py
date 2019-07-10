@@ -973,12 +973,17 @@ class upload:
 update_results = {
   "start_date": "-",
   "end_date": "-",
-  'is_auto_scale_strategy': False,
+  "is_auto_scale_strategy": False,
   "last_refresh": None,
+  "update_scan_lock": None,
   "results": dict()
 }
+
 class update:
   def GET(self):
+    if update_results["start_date"] == "-" and update_results["end_date"] == "-":
+      return index().GET() 
+
     # show results
     render = web.template.render(TEMPLATE_PATH, globals={"sorted": sorted, "plugin_type_to_string": plugin_type_to_string})
     update_results['last_refresh'] = datetime.datetime.now()
@@ -990,7 +995,9 @@ class update:
       print("webapi: update of {0} complete!".format(scanner_name))
 
       # store to temp object
-      result["exported"] = "..."
+      if update_results['is_auto_scale_strategy']:
+        result["exported"] = "..."
+
       update_results['results'][result['container_name']] = result
 
       # update db if required
@@ -1143,7 +1150,7 @@ class update:
 
   def POST(self):
     # check if update is already running / pending
-    if update_results["start_date"] != "-":
+    if update_results["start_date"] != "-" and update_results["end_date"] == "-":
       return self.GET()
 
     # Initialize data structure
@@ -1157,11 +1164,12 @@ class update:
     update_promise = CAV.update()
 
     if update_results['is_auto_scale_strategy']:
-      update_results["update_scan_lock"] = "queue"
+      # AUTO SCALE STRATEGY UPDATE
       update_results['engine_update_complete_date'] = "-"
       update_results['engine_export_complete_date'] = "-"
       update_results['scp_complete_date'] = "-"
       update_results['load_started_date'] = "-"
+      update_results['update_scan_lock'] = "queue"
       update_results['machine_results'] = dict()
 
       # update temp data structure with results
@@ -1211,7 +1219,7 @@ class update:
         update_results['machine_results'][machine.id] = dict()
         for engine, values in engine_dict._engine_promises.items():
           update_results['machine_results'][machine.id][engine.container_name] = "-"
-      
+
       for engine in update_promise["engine_update_promise"].get_scanning_engines():
         update_results["results"][engine.container_name] = {
             'engine': engine.name,
@@ -1225,17 +1233,72 @@ class update:
             'has_internet': engine.container_requires_internet,
             'speed': engine.speed
         }
-    else:
-      #TODO, old impl
-      pass
+    elif isinstance(CAV.scanner_strategy, LocalNoLimitDockerStrategy):
+      update_results["update_scan_lock"] = "set"
 
+      # update temp data structure with results
+      update_promise.engine_then(
+        lambda res: self._post_engine_update(res),
+        lambda res: self._post_engine_update(res)
+      ).then(
+        lambda res: self._update_complete(res),
+        lambda res: self._update_complete(res)
+      )
+
+      for engine in update_promise.get_scanning_engines():
+        update_results["results"][engine.container_name] = {
+            'engine': engine.name,
+            'updated': "...",
+            'exported': "-",
+            'old_signature_version': "...",
+            'old_container_build_time': "...",
+            'signature_version': "...",
+            'container_build_time': "...",
+            'plugin_type': engine.plugin_type,
+            'has_internet': engine.container_requires_internet,
+            'speed': engine.speed
+        }
+    elif isinstance(CAV.scanner_strategy, LocalLimitDockerStrategy):
+      # update temp data structure with results
+      update_promise["engine_update_promise"].engine_then(
+        lambda res: self._post_engine_update(res),
+        lambda res: self._post_engine_update(res)
+      ).then(
+        lambda res: self._update_complete(res),
+        lambda res: self._update_complete(res)
+      )
+
+      # load unlocked promise (hits when lock tasks is executed by the pool)
+      def update_lock_state(state):
+        update_results['update_scan_lock'] = state
+      
+      update_promise["update_lock_set_promise"].then(
+        lambda res: update_lock_state("set"), None
+      )
+
+      update_results['update_scan_lock'] = "queue"
+      for engine in update_promise["engine_update_promise"].get_scanning_engines():
+        update_results["results"][engine.container_name] = {
+            'engine': engine.name,
+            'updated': "...",
+            'exported': "-",
+            'old_signature_version': "...",
+            'old_container_build_time': "...",
+            'signature_version': "...",
+            'container_build_time': "...",
+            'plugin_type': engine.plugin_type,
+            'has_internet': engine.container_requires_internet,
+            'speed': engine.speed
+        }
+      
+      print(update_results)
 
     return self.GET()
 
 # -----------------------------------------------------------------------
 class system:
   def GET(self):
-    statistics = scanner_strategy.get_statistics()
+    statistics = scan_strategy.get_statistics()
 
     statistics["cpu_count"] = cpu_count()
 

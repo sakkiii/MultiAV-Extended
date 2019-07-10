@@ -187,6 +187,7 @@ class DockerMachine():
     def _list_existing_networks(self):
         cmd = "docker network ls --format \"{{.Name}}\""
         output = self.execute_command(cmd)
+        output = output.replace("\"", "")
         networks = output.split("\n")
         return networks
 
@@ -298,10 +299,6 @@ class DockerMachine():
             # run update
             engine_update_promise = temp_update_container.update()
 
-            # cleanup
-            engine_update_promise.then(
-              lambda res: temp_update_container.remove()
-            )
             update_promises[engine] = engine_update_promise
 
         update_promise = MultiActionPromise(update_promises)
@@ -419,36 +416,35 @@ class DockerMachine():
 class LocalDynamicDockerMachine(DockerMachine):
     def __init__(self, cfg_parser, engine_classes, max_containers_per_machine, max_scans_per_container, id_overwrite = None):
         DockerMachine.__init__(self, cfg_parser, engine_classes, max_containers_per_machine, max_scans_per_container, id_overwrite = id_overwrite)
-
-        with self._container_lock.writer_lock:
-            if len(self.containers) > max_containers_per_machine:
-                print("found running containers on this docker machine. Stopping them now to get a clean state...")
-                for container in self.containers[max_containers_per_machine:]:
-                    self.remove_container(container)
-                    print("stopped container {0} running engine {1}".format(container.id, container.engine.name))
     
     def try_do_scan(self, engine, file_path):
         try:
             self._container_lock.writer_lock.acquire()
-            containers = self.find_containers_by_engine(engine)
             
-            if len(containers) != 0:
-                if not containers[0].try_do_scan(file_path):
-                    return None, None
+            # multiple scans per container allowed?
+            if self.max_scans_per_container != 1:
+                containers = self.find_containers_by_engine(engine)
                 
-                return containers[0], self
-            else:
-                container = self._create_container(engine, run_now=False)
-                self._container_lock.writer_lock.release()
+                if len(containers) != 0:
+                    if not containers[0].try_do_scan(file_path):
+                        return None, None
+                    
+                    return containers[0], self
+            
+            # create new container
+            print("Creating container on {0} with engine {1}".format(self.id, engine.name))
 
-                if self.max_scans_per_container != 1:
-                    if not container.run():
-                        raise Exception("Could not run container with engine {0} on machine {1}".format(engine.name, self.id))
+            container = self._create_container(engine, run_now=False)
+            self._container_lock.writer_lock.release()
 
-                if not container.try_do_scan(file_path):
-                    raise Exception("Could not add scan to newly created container with engine {0} on machine {1}".format(engine.name, self.id))
-                
-                return container, self
+            if self.max_scans_per_container != 1:
+                if not container.run():
+                    raise Exception("Could not run container with engine {0} on machine {1}".format(engine.name, self.id))
+
+            if not container.try_do_scan(file_path):
+                raise Exception("Could not add scan to newly created container with engine {0} on machine {1}".format(engine.name, self.id))
+            
+            return container, self
         finally:
             if self._container_lock.writer_lock._is_owned():
                 self._container_lock.writer_lock.release()
@@ -457,7 +453,7 @@ class LocalStaticDockerMachine(DockerMachine):
     def __init__(self, cfg_parser, engine_classes, id_overwrite = None):
         DockerMachine.__init__(self, cfg_parser, engine_classes, max_containers_per_machine = -1, max_scans_per_container = -1, id_overwrite = id_overwrite)
 
-        print("Checking if all plugins are running and staring them if required...")
+        print("Starting a container for all plugins...")
         for engine_class in self.engine_classes:
             #create instance
             engine = engine_class(self.cfg_parser)
