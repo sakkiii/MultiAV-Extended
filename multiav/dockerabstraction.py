@@ -900,11 +900,8 @@ class DockerContainer():
             if set_active:
                 with self.machine._images_lock[self.engine.name].writer_lock:
                     # remove old image
-                    cmd = "docker rmi malice/{0}:old".format(self.engine.container_name)
-                    output = self.machine.execute_command(cmd)
-                    if "Error" in output and not "No such image" in output:
+                    if not self.remove_image("old"):
                         print("Container {0} on machine {1} remove :old image FAILED!".format(self.engine.name, self.machine.id))
-                        print(output)
                         return False
 
                     # rename current to old
@@ -913,11 +910,8 @@ class DockerContainer():
                         return False
 
                     # rename latest to current 
-                    cmd = "docker tag malice/{0}:latest malice/{0}:current".format(self.engine.container_name)
-                    output = self.machine.execute_command(cmd)
-                    if "Error" in output:
+                    if not self.addtag("latest", "current"):
                         print("Container {0} on machine {1} retag :latest image to :current FAILED!".format(self.engine.name, self.machine.id))
-                        print(output)
                         return False
             
             print("Pull of plugin {0} on machine {1} successs!".format(self.engine.name, self.machine.id))
@@ -1066,26 +1060,35 @@ class DockerContainer():
 
         if "No such file or directory" in output or "Unable to find image" in output:
             return "-"
+        
         return output
     
-    def retag(self, old_tag, new_tag):
-        # add new tag
-        cmd = "docker tag malice/{0}:{1} malice/{0}:{2}".format(self.engine.container_name, old_tag, new_tag)
+    def remove_image(self, tag):
+        cmd = "docker rmi malice/{0}:{1}".format(self.engine.container_name, tag)
         output = self.machine.execute_command(cmd)
 
         if "Error" in output and not "No such image" in output:
             print(output)
             return False
+        
+        return True
 
-        # remove old tag
-        cmd = "docker rmi malice/{0}:{1}".format(self.engine.container_name, old_tag)
+    def addtag(self, current_tag, new_tag):
+        cmd = "docker tag malice/{0}:{1} malice/{0}:{2}".format(self.engine.container_name, current_tag, new_tag)
         output = self.machine.execute_command(cmd)
 
-        
         if "Error" in output and not "No such image" in output:
             print(output)
             return False
         return True
+
+    def retag(self, old_tag, new_tag):
+        # add new tag
+        if not self.addtag(old_tag, new_tag):
+            return False
+
+        # remove old tag
+        return self.remove_image(old_tag)
 
     def update(self):
         def update_wrapper_function(resolve, reject):
