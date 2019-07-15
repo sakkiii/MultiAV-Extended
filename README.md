@@ -1,8 +1,13 @@
 MultiAV: Extended
 =======================
-
 Combine the awesome approaches of blacktop's av docker plugins with joxeankoret's MultiAV! Pure simplicity and pythonness! Autoscale support for huge scan tasks using docker-machine included!
 
+**Quicklinks:**
+- [QuickStart Guide](https://github.com/danieljampen/multiav/wiki/QuickStartGuide)
+- [Configuration Documentation](https://github.com/danieljampen/multiav/wiki/Configuration)
+- [REST API Documentation](https://github.com/danieljampen/multiav/wiki/RESTAPI)
+
+## MultiAV: Extended in Action
 ![UploadImage](https://raw.githubusercontent.com/danieljampen/multiav/master/docs/images/multiav-upload.png)
 
 ![RunningScan](https://raw.githubusercontent.com/danieljampen/multiav/master/docs/images/multiav-scan-running.png)
