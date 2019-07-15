@@ -15,8 +15,10 @@ with open('HISTORY.rst') as history_file:
     history = history_file.read().replace('.. :changelog:', '')
 
 requirements = [
-    'web.py',
-    'pyClamd',
+    'web.py==0.40-dev1',
+    'rwlock==0.0.7',
+    'promise==2.2.1',
+    'requests==2.18.4',
 ]
 
 test_requirements = [
