@@ -39,6 +39,14 @@ class ScannerStrategy:
         self._update_start_event = Event()
         self._update_finished_event = Event()
 
+        # check docker installation
+        if not self._is_docker_installed():
+            raise Exception("Please install docker! MultiAV won't work without it!")
+    
+    def _is_docker_installed(self):
+        # e.g: docker: /usr/bin/docker /etc/docker /usr/share/docker.io /usr/share/man/man1/docker.1.gz
+        return len(self._execute_command("whereis docker").split("docker")) > 2
+
     def _add_scan_time(self, scan_time):
         with self._scan_time_lock.writer_lock:
             new_scan_amount = self.scan_time_average[0] + 1
@@ -241,7 +249,13 @@ class LocalLimitDockerStrategy(LocalDockerStrategy):
 
         # use thread pool to handle overload without scaling
         self.max_containers_per_machine = int(self.cfg_parser.gets("MULTIAV","MAX_CONTAINERS", 8))
+        if self.max_containers_per_machine <= 0:
+            raise Exception("MAX_CONTAINERS invalid. Must be bigger than 0!")
+        
         self.worker_amount = self.max_containers_per_machine * self.max_scans_per_container
+        if self.worker_amount <= 0:
+            raise Exception("MAX_SCANS_PER_CONTAINER invalid. Must be bigger than 0!")
+        
         self.pool = PromiseExecutorPool(self.worker_amount)
         print("LocalDockerStrategy: initialized thread pool using {0} threads".format(self.worker_amount))
         
@@ -307,9 +321,6 @@ class LocalLimitDockerStrategy(LocalDockerStrategy):
         queue_size = self.pool.get_queue_size_including_active_workers()
         avg_scan_time = self._get_average_scan_time()
         total_workers = self.pool.get_worker_amount()
-
-        if total_workers == 0:
-            total_workers = 1
 
         return math.ceil(queue_size / total_workers) * avg_scan_time
 
@@ -454,6 +465,14 @@ class AutoScaleDockerStrategy(ScannerStrategy):
         self._machines = []
         print("AutoScaleDockerStrategy: initialized using min_machines: {0} max_machines: {1} max_containers_per_machine: {2} max_scans_per_container: {3}".format(self.min_machines, self.max_machines, self.max_containers_per_machine, self.max_scans_per_container))
 
+        # check if docker-machine is installed
+        if not self._is_docker_machine_installed():
+            raise Exception("Docker-machine is not installed. Please install docker-machine to allow auto-scale to work.")
+
+    def _is_docker_machine_installed(self):
+        # e.g. docker-machine: /usr/local/bin/docker-machine
+        return len(self._execute_command("whereis docker-machine").split("docker-machine")) > 2
+
     def _add_machine_startup_time(self, time):
         with self._machine_startup_time_lock.writer_lock:
             new_amount = self._expected_machine_startup_time[0] + 1
@@ -552,7 +571,7 @@ class AutoScaleDockerStrategy(ScannerStrategy):
     
     def _create_machine_async(self, never_shutdown=False):
         def promise_function(resolve, reject, never_shutdown):
-            machine = self._create_machine(never_shutdown)
+            machine, startup_time = self._create_machine(never_shutdown)
             if machine == None:
                 reject(CreateDockerMachineMachineException())
             
@@ -588,11 +607,11 @@ class AutoScaleDockerStrategy(ScannerStrategy):
                     startup_event.set()
                     del self._machines_starting[startup_event]
                 
-                end_time = time.time()
-                self._add_machine_startup_time(end_time-start_time)
-                print("New average machine startup time: {0}s (machine started in {1}s)".format(self._get_average_machine_startup_time(), end_time-start_time))
+                startup_time = time.time() - start_time
+                self._add_machine_startup_time(startup_time)
+                print("New average machine startup time: {0}s (machine started in {1}s)".format(self._get_average_machine_startup_time(), startup_time))
 
-                return machine
+                return machine, startup_time
             except CreateDockerMachineMachineException as e:
                 print(e)
                 return None
@@ -637,7 +656,7 @@ class AutoScaleDockerStrategy(ScannerStrategy):
             self._machine_lock.writer_lock.release()
 
             # start a new machine
-            m = self._create_machine() # blocks for as long as the machine startup takes
+            m, startup_time = self._create_machine() # blocks for as long as the machine startup takes
 
             if m is None:
                 return self._get_container_for_scan(engine, file_path)
@@ -645,7 +664,7 @@ class AutoScaleDockerStrategy(ScannerStrategy):
             container, machine = m.try_do_scan(engine, file_path)
 
             # add time reduction due to start
-            reduce_scan_time_by = self._get_average_machine_startup_time()
+            reduce_scan_time_by = startup_time
                 
         return container, reduce_scan_time_by
 
@@ -664,8 +683,9 @@ class AutoScaleDockerStrategy(ScannerStrategy):
             
             # would require machine start. is it worth it? (calc worst case)
             times = self._calculate_times_to_finish_queue_for_startable_machines()
+            #print("_increase_workforce_if_possible: times {0}".format(times))
             amount_of_machines, time_to_finish_queue = self._get_lowest_work_time_and_machines_to_start_from_times_touple_list(times)
-            print("_increase_workforce_if_possible: amount_of_machines {0} queue_size: {1} average_scan_time: {2} time_to_finish_queue: {3}".format(amount_of_machines, queue_size, self._get_average_scan_time(), time_to_finish_queue))
+            #print("_increase_workforce_if_possible: amount_of_machines {0} queue_size: {1} average_scan_time: {2} time_to_finish_queue: {3}".format(amount_of_machines, queue_size, self._get_average_scan_time(), time_to_finish_queue))
             
             if amount_of_machines == 0:
                 # finishing the queue is faster than starting a new machine
@@ -679,7 +699,7 @@ class AutoScaleDockerStrategy(ScannerStrategy):
                     self.pool.add_worker()
     
     def _get_lowest_work_time_and_machines_to_start_from_times_touple_list(self, times):
-        amount_of_machines = times[0]
+        amount_of_machines = times[0][0]
         work_to_finish_queue = times[0][1]
         amount_of_times = len(times)
 
@@ -709,24 +729,38 @@ class AutoScaleDockerStrategy(ScannerStrategy):
             # calculate time when starting
             workers_per_machine = self.max_containers_per_machine * self.max_scans_per_container
             workers_waiting_for_machine_start = machines_starting * workers_per_machine
-            currently_working_workers = total_workers - workers_waiting_for_machine_start
+            currently_working_workers = len(self._machines) * workers_per_machine
+            # print("machines_starting: {0} currently_working_workers: {1} workers_waiting_for_machine_start: {2} workers_per_machine: {3}".format(machines_starting, currently_working_workers, workers_waiting_for_machine_start, workers_per_machine))
 
             items_completable_in_machine_startup_time = int(self._get_average_machine_startup_time() / avg_scan_time) * currently_working_workers
             items_to_complete_post_startup = queue_size - items_completable_in_machine_startup_time
 
             if items_completable_in_machine_startup_time < queue_size:
-                # as we round down before, we need to calculate the correct time now
-                time = items_completable_in_machine_startup_time * avg_scan_time / currently_working_workers
+                if currently_working_workers != 0:
+                    # as we round down before, we need to calculate the correct time now
+                    time = items_completable_in_machine_startup_time * avg_scan_time / currently_working_workers
+                else:
+                    time = self._get_average_machine_startup_time()
 
                 workers_post_startup = currently_working_workers + (i * workers_per_machine)
-                additional_computation_time = math.ceil(items_to_complete_post_startup / workers_post_startup) * avg_scan_time
+
+                if workers_post_startup != 0:
+                    additional_computation_time = math.ceil(items_to_complete_post_startup / workers_post_startup) * avg_scan_time
+                else:
+                    additional_computation_time = float("inf")
+                
                 time += additional_computation_time
             else:
-                time = math.ceil(queue_size / currently_working_workers) * avg_scan_time
+                if currently_working_workers != 0:
+                    time = math.ceil(queue_size / currently_working_workers) * avg_scan_time
+                elif queue_size == 0:
+                    time = 0
+                else:
+                    time = float("inf")
 
             times.append((machines_to_start, time))
         
-        print(times)
+        #print(times)
         return times
 
 
