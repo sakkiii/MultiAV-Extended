@@ -456,6 +456,8 @@ dd {
 
 .pagination a.not-allowed:hover{
   cursor: not-allowed;
+  color: #666666;
+  background-color: unset;
 }
 
 .actionmenu {

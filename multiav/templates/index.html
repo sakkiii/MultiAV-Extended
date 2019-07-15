@@ -90,8 +90,7 @@ $def with (scanners, cpu_count, AV_SPEED)
         </tr>
     $if len(scanners) != 0:
         $for scanner in sorted(scanners, key=lambda x: x["name"]):
-            $ opacity = "1.0" if scanner["enabled"] else "0.5"
-            <tr style="opacity:$opacity">
+            <tr style="opacity:$("1.0" if scanner["enabled"] else "0.5")">
                 <td style="text-align: center">
                     $if scanner["enabled"]:
                         <span style="color:green;font-weight:bold" title="Scanner enabled">&#x2713;</span>
@@ -103,8 +102,8 @@ $def with (scanners, cpu_count, AV_SPEED)
                     $scanner["plugin_type"]
                 </td>
                 <td>$scanner['speed']</td>
-                <td>$scanner['engine_version']</td>
-                <td>$scanner['signature_version']</td>
+                <td>$(scanner['engine_version'] if len(scanner['engine_version']) != 0 else "-")</td>
+                <td>$(scanner['signature_version'] if len(scanner['signature_version']) != 0 else "-")</td>
                 <td>
                 $if scanner["has_internet"] == 1:
                     <span style="color:red" title="WARNING: Sample could leak to this vendor!">&#x25cf; enabled</span>

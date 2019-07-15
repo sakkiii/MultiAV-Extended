@@ -85,7 +85,7 @@ $def result_data_table(plugin_name, plugin_result_data):
               $if pagination["backpage_disabled"]:
                 <a class="not-allowed">&laquo;</a>
               $else:
-                <a href="/last?page=$pagination['backpage']">&laquo;</a>
+                <a href="/last?page=$pagination['backpage']" title="previous page">&laquo;</a>
             </div>
             <div>
                 $for page in pagination["pages"]:
@@ -98,7 +98,7 @@ $def result_data_table(plugin_name, plugin_result_data):
               $if pagination["nextpage_disabled"]:
                 <a class="not-allowed">&raquo;</a>
               $else:
-                <a href="/last?page=$pagination['nextpage']">&raquo;</a>
+                <a href="/last?page=$pagination['nextpage']" title="next page">&raquo;</a>
             </div>
             </div>
           </div>
