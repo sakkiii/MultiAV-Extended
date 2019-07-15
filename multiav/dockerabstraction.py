@@ -228,15 +228,15 @@ class DockerMachine():
         return self.DOCKER_NETWORK_INTERNET_NAME in output
 
     def create_no_internet_network(self):
-        network_address = self.cfg_parser.gets("MULTIAV", "DOCKER_NETWORK_NO_INTERNET", "10.127.139.0")
-        cmd = "docker network create --driver bridge --internal --subnet={1}/24 {0}".format(self.DOCKER_NETWORK_NO_INTERNET_NAME, network_address)
+        network_address = self.cfg_parser.gets("MULTIAV", "DOCKER_NETWORK_NO_INTERNET", "10.127.139.0/24")
+        cmd = "docker network create --driver bridge --internal --subnet={1} {0}".format(self.DOCKER_NETWORK_NO_INTERNET_NAME, network_address)
         self.execute_command(cmd)
 
         return self.does_no_internet_network_exist()
 
     def create_internet_network(self):
-        network_address = self.cfg_parser.gets("MULTIAV", "DOCKER_NETWORK_INTERNET", "10.231.101.0")
-        cmd = "docker network create --driver bridge --subnet={1}/24 {0}".format(self.DOCKER_NETWORK_INTERNET_NAME, network_address)
+        network_address = self.cfg_parser.gets("MULTIAV", "DOCKER_NETWORK_INTERNET", "10.231.101.0/24")
+        cmd = "docker network create --driver bridge --subnet={1} {0}".format(self.DOCKER_NETWORK_INTERNET_NAME, network_address)
         output = self.execute_command(cmd)
 
         return not "Error" in output

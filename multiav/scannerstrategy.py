@@ -42,10 +42,16 @@ class ScannerStrategy:
         # check docker installation
         if not self._is_docker_installed():
             raise Exception("Please install docker! MultiAV won't work without it!")
+        
+        if not self._is_docker_accessible():
+            raise Exception("Docker not accessible by current user. Please run the tool as root.")
     
     def _is_docker_installed(self):
         # e.g: docker: /usr/bin/docker /etc/docker /usr/share/docker.io /usr/share/man/man1/docker.1.gz
         return len(self._execute_command("whereis docker").split("docker")) > 2
+    
+    def _is_docker_accessible(self):
+        return not ("Got permission denied" in self._execute_command("docker ps"))
 
     def _add_scan_time(self, scan_time):
         with self._scan_time_lock.writer_lock:

@@ -100,10 +100,10 @@ class OrderedEnum(Enum):
 
 class AV_SPEED(OrderedEnum):
   ALL = 3  # Run only when all engines must be executed
-  SLOW = 2
-  MEDIUM = 1
-  FAST = 0
   ULTRA = -1
+  FAST = 0
+  MEDIUM = 1
+  SLOW = 2
 
 class PLUGIN_TYPE(OrderedEnum):
   #LEGACY = 0

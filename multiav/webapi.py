@@ -490,7 +490,7 @@ class last:
         "backpage": 0,
         "backpage_disabled": False,
         "currentpage": page + 1,
-        "nextpage": nextpage,
+        "nextpage": nextpage + 1,
         "nextpage_disabled": False
       }
 
