@@ -44,4 +44,16 @@ document.addEventListener('DOMContentLoaded', function() {
             c.checked = !c.checked;
         }
     };
+    
+    if(document.getElementById("refreshtoggle") != null)
+    {
+      if(typeof enableRefresh !== 'undefined') {
+        document.getElementById("refreshtoggle").checked = enableRefresh;
+      }
+
+      setInterval(function () {
+        if (document.getElementById("refreshtoggle").checked)
+          window.location.href = window.location.href;
+      }, 5000);
+    }
 });

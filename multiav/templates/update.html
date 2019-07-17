@@ -2,7 +2,6 @@ $def with (update_results)
 <html>
 <head>
   <link href="/static/multiav.css" rel="stylesheet" type="text/css">
-  <script src="/static/multiav.js"></script>
 </head>
 <body>
   <div class="header">
@@ -170,17 +169,6 @@ $def with (update_results)
   $else:
     <script>var enableRefresh = false;</script>
   
-  <script>
-    document.getElementById("refreshtoggle").checked = enableRefresh;
-  
-    function toggle_refresh(){
-      enableRefresh = !enableRefresh;
-    }
-  
-    setTimeout(function () {
-      if (enableRefresh)
-        window.location.href = window.location.href;
-    }, 5000);
-  </script>
+  <script src="/static/multiav.js"></script>
 </body>
 </html>
