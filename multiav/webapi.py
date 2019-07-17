@@ -1,35 +1,42 @@
+import datetime
+import json
 import os
 import sys
-import json
 import time
-import datetime
-import web
 import traceback
+import web
+import json
+import base64
+
 
 from functools import reduce
-from rwlock import RWLock
 from hashlib import md5, sha1, sha256
 from itertools import groupby
 from multiprocessing import cpu_count
-
-from multiav.core import CMultiAV, AV_SPEED, PLUGIN_TYPE
+from rwlock import RWLock
+from multiav.core import AV_SPEED, PLUGIN_TYPE, CMultiAV
 from multiav.enumencoder import EnumEncoder
+from multiav.exceptions import (CreateNetworkException, PullPluginException,
+                                StartPluginException)
 from multiav.safeconfigparserextended import SafeConfigParserExtended
-from multiav.scannerstrategy import LocalNoLimitDockerStrategy, LocalLimitDockerStrategy, AutoScaleDockerStrategy
-from multiav.exceptions import PullPluginException, StartPluginException, CreateNetworkException
+from multiav.scannerstrategy import (AutoScaleDockerStrategy,
+                                     LocalLimitDockerStrategy,
+                                     LocalNoLimitDockerStrategy)
 
 urls = (
+    # web pages
     '/', 'index',
     '/upload', 'upload',
-    '/api/upload', 'api_upload',
-    '/api/search', 'api_search',
-    '/api/report', 'api_report',
     '/about', 'about',
     '/last', 'last',
     '/search', 'search',
     '/export/csv', 'export_csv',
     '/update', 'update',
-    '/system', 'system'
+    '/system', 'system',
+    # API endpoints
+    '/api/v1/sample', 'api_sample',
+    '/api/v1/sample/(.*)', 'api_manage_sample',
+    '/api/v1/scanner', 'api_scanner'
 )
 
 app = web.application(urls, globals())
@@ -262,10 +269,10 @@ class CDbSamples():
   def search_report_by_id(self, report_id):
     with self.reports_lock.reader_lock:
       with self.db.transaction():
-        query = "SELECT samples.id,samples.name,samples.md5,samples.sha1,samples.sha256,samples.size,reports.id AS report_id,reports.infected,reports.start_date,reports.end_date " \
+        query = "SELECT reports.id,samples.name,samples.md5,samples.sha1,samples.sha256,samples.size,reports.infected,reports.start_date,reports.end_date " \
                 "FROM samples " \
                 "LEFT JOIN reports ON samples.id = reports.sample_id " \
-                "WHERE report_id = $report_id"
+                "WHERE reports.id = $report_id"
         rows = self.db.query(query, vars={"report_id": report_id}).list()
         for row in rows:
           row["result"] = self.search_results_by_report_id(report_id)
@@ -321,6 +328,14 @@ class CDbSamples():
         for row in rows:
           row["result"] = self.search_results_by_report_id(row["report_id"])
         return rows
+
+  def get_samples(self):
+    with self.reports_lock.reader_lock:
+      with self.db.transaction():
+        query = "SELECT reports.id AS id,samples.name,samples.md5,samples.sha1,samples.sha256,samples.size,reports.start_date,reports.end_date " \
+                "FROM samples "\
+                "LEFT JOIN reports ON samples.id = reports.sample_id "
+        return self.db.query(query).list()
 
   def get_scanners(self):
     with self.db.transaction():
@@ -742,113 +757,125 @@ class about:
 
 
 # -----------------------------------------------------------------------
-class api_report:
-  def GET(self):
-    return self.POST()
-
-  def POST(self):
-    i = web.input(id="")
-    if i["id"] == "":
-      return '{"error": "report id not provided."}'
-
-    with CDbSamples() as db:
-      result = db.search_report_by_id(i["id"])
-    
-    if len(result) == 1:
-      print("webapi: returning report for id {0}".format(i["id"]))
-      return json.dumps(result[0])
-    else:
-      print("webapi: error returning report for id {0}: not found".format(i["id"]))
-      return json.dumps({"error": "report not found"})
-
-# -----------------------------------------------------------------------
-class api_search:
-  def GET(self):
-    return self.POST()
-
-  def POST(self):
-    i = web.input(file_hash="")
-    if i["file_hash"] == "":
-      return '{"error": "No file uploaded or invalid file."}'
-
-    l = []
-    with CDbSamples() as db:
-      for q in list(set(i["file_hash"].split(','))):
-        ret = db.search_samples(q)
-        for row in ret:
-          l.append(row)
-
-    if len(l) != 0:
-      return json.dumps(l, cls=EnumEncoder)
-
-    return '{"error": "Not found."}'
-
-
-# -----------------------------------------------------------------------
-class api_upload:
-  def POST(self):
-    i = web.input(file_upload={}, minspeed="-1", allow_internet="false")
-    if "file_upload" not in i or i["file_upload"] is None or i["file_upload"] == "":
-      return '{"error": "No file uploaded or invalid file."}'
-
-    buf = i["file_upload"].value
-    filename = i["file_upload"].filename
-
-    av_min_speed = AV_SPEED(int(i["minspeed"]))
-    av_allow_internet = i["allow_internet"] == "true"
-
-    # Setup the report (the json response)
-    report = {
-        "hashes": {
-          "md5": md5(buf).hexdigest(),
-          "sha1": sha1(buf).hexdigest(),
-          "sha256": sha256(buf).hexdigest()
-        },
-        "file": {
-          "name": filename,
-          "size": len(buf),
-        }
-    }
-
-    # Persist report to db
-    print("webapi: starting insert")
-    with CDbSamples() as db:
-      report["id"] = db.create_sample_report(filename, buf)
-      print("webapi: insert complete") 
-
-      # Queue the file scan
-      scan_promise = CAV.scan_buffer(
-        buf,
-        av_min_speed, 
-        av_allow_internet, 
-        {"pre": [lambda engine, filename: self.pre_scan_action(report["id"], engine, filename)]})
+class api_manage_sample:
+  def GET(self, sample_id):
+    try:
+      sample_id = int(sample_id)
+      if sample_id <= 0:
+        raise Exception("invalid sample id")
+        
+      with CDbSamples() as db:
+        result = db.search_report_by_id(sample_id)
       
-      scan_promise.engine_then(
-        lambda res: self.post_engine_scan_action(report["id"], res),
-        lambda res: self.post_engine_scan_action(report["id"], res)
-      )
-      scan_promise.then(
-        lambda res: self.post_scan_action(report["id"], res),
-        lambda res: self.post_scan_action(report["id"], res)
-      )
+      if len(result) != 1:
+        print("webapi: error returning report for id {0}: not found".format(sample_id))
+        raise Exception("report not found")
 
-      print("webapi: scan queued")
+      print("webapi: returning report for id {0}".format(sample_id))
 
-      # Create initial scan reports in db
-      for engine in scan_promise.get_scanning_engines():
-        initial_scan_report = {
-          'engine': '',
-          'updated': '',
-          'name': engine.name,
-          'has_internet': engine.container_requires_internet,
-          'infected': '',
-          'result': '',
-          'speed': engine.speed.value,
-          'plugin_type': engine.plugin_type.value
-        }
-        db.add_scan_result(report["id"], initial_scan_report, queued=True, scanning=False)
+      web.header("Content-Type", "application/json")
+      return json.dumps(result[0])
+    except Exception as e:
+      raise web.HTTPError(status="400 Bad Request", headers={"Content-Type": "application/json"}, data=json.dumps({
+        "error": str(e)
+      }))
 
-    return json.dumps(report, cls=EnumEncoder)
+
+# -----------------------------------------------------------------------
+class api_sample:
+  def GET(self):
+    try:
+      with CDbSamples() as db:
+        samples = db.get_samples()
+      
+      web.header("Content-Type", "application/json")
+      return json.dumps(samples)
+    except Exception as e:
+      raise web.HTTPError(status="400 Bad Request", headers={"Content-Type": "application/json"}, data=json.dumps({
+        "error": str(e)
+      }))
+
+  def POST(self):
+    try:
+      request_data = json.loads(web.data())
+      
+      # get request data
+      if not "minspeed" in request_data:
+        raise Exception("missing parameter: minspeed")
+
+      minspeed = request_data["minspeed"]
+      av_min_speed = AV_SPEED(int(minspeed))
+
+      if not "allow_internet" in request_data:
+        raise Exception("missing parameter: allow_internet")
+      
+      av_allow_internet = request_data["allow_internet"].lower() == "true"
+
+      if not "sample" in request_data:
+        raise Exception("missing parameter: sample")
+      if not "sample_name" in request_data:
+        raise Exception("missing parameter: sample_name")
+
+      buf = base64.b64decode(request_data["sample"])
+      filename = request_data["sample_name"]
+
+      # Setup the report (the json response)
+      report = {
+          "hashes": {
+            "md5": md5(buf).hexdigest(),
+            "sha1": sha1(buf).hexdigest(),
+            "sha256": sha256(buf).hexdigest()
+          },
+          "file": {
+            "name": filename,
+            "size": len(buf),
+          }
+      }
+
+      # Persist report to db
+      print("webapi: starting insert")
+      with CDbSamples() as db:
+        report["id"] = db.create_sample_report(filename, buf)
+        print("webapi: insert complete") 
+
+        # Queue the file scan
+        scan_promise = CAV.scan_buffer(
+          buf,
+          av_min_speed, 
+          av_allow_internet, 
+          {"pre": [lambda engine, filename: self.pre_scan_action(report["id"], engine, filename)]})
+        
+        scan_promise.engine_then(
+          lambda res: self.post_engine_scan_action(report["id"], res),
+          lambda res: self.post_engine_scan_action(report["id"], res)
+        )
+        scan_promise.then(
+          lambda res: self.post_scan_action(report["id"], res),
+          lambda res: self.post_scan_action(report["id"], res)
+        )
+
+        print("webapi: scan queued")
+
+        # Create initial scan reports in db
+        for engine in scan_promise.get_scanning_engines():
+          initial_scan_report = {
+            'engine': '',
+            'updated': '',
+            'name': engine.name,
+            'has_internet': engine.container_requires_internet,
+            'infected': '',
+            'result': '',
+            'speed': engine.speed.value,
+            'plugin_type': engine.plugin_type.value
+          }
+          db.add_scan_result(report["id"], initial_scan_report, queued=True, scanning=False)
+
+      web.header("Content-Type", "application/json")
+      return json.dumps(report, cls=EnumEncoder)
+    except Exception as e:
+      raise web.HTTPError(status="400 Bad Request", headers={"Content-Type": "application/json"}, data=json.dumps({
+        "error": str(e)
+      }))
 
   # Function to call after a scan task is processed
   def post_engine_scan_action(self, report_id, res):

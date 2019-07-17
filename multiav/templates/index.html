@@ -130,16 +130,28 @@ $def with (scanners, cpu_count, AV_SPEED)
     var previewTemplate = previewNode.parentNode.innerHTML;
     previewNode.parentNode.removeChild(previewNode);
 
+    // Custom upload handler to support base64 encoded file uploads
+    var prot = Dropzone.prototype.submitRequest;
+    Dropzone.prototype.submitRequest = function (xhr, formData, files) {
+        if (this.options.customHandler) {
+            this.options.customHandler.call(this, xhr, formData, files, function (newXhr, newFormData, newFiles) {
+                prot.call(this, newXhr, newFormData, newFiles);
+            });
+        } else {
+            prot.call(this, xhr, formData, files);
+        }
+    };
 
     Dropzone.options.myAwesomeDropzone = { 
-        url: "/api/upload",
+        url: "/api/v1/sample",
         maxFilesize: null,
         paramName: "file_upload",
+        uploadMultiple: false,
         autoProcessQueue: false,
         parallelUploads: $cpu_count,
         autoQueue: false,
         previewTemplate: previewTemplate,
-        timeout: 10 * 60 * 1000,
+        timeout: 10 * 60 * 1000, // 10min
         dictDefaultMessage: "... drop the files here to analyze ...",
         init: function() {
             var submitButton = document.querySelector("#act-on-upload");
@@ -180,8 +192,7 @@ $def with (scanners, cpu_count, AV_SPEED)
             }
         },
         success: function(file, response) {
-            response_object = JSON.parse(response);
-            reportIds.push(response_object["id"]);
+            reportIds.push(response.id);
             file.previewElement.querySelector(".status").innerHTML = "scan queued!";
         },
         errror: function(file, response) {
@@ -196,12 +207,21 @@ $def with (scanners, cpu_count, AV_SPEED)
                 window.location.href = "/search?id=" + reportIds.join(",");
             }
         },
-        sending: function(file, xhr, formdata) {
+        customHandler: function(xhr, formData, files, cb) {
+            let base64_data = files[0].dataURL;
+            base64_data = base64_data.substr(base64_data.search("base64,") + 7);
             let field = document.querySelector("#scansettings select");
-            formdata.append("minspeed", field.value);
+            let minspeed = field.value;
             field = document.querySelector("#scansettings input");
-            formdata.append("allow_internet", field.checked? "true": "false");
-        }
+            let allow_internet = field.checked? "true": "false";
+
+            xhr.send(JSON.stringify({
+                "allow_internet": allow_internet,
+                "minspeed": minspeed,
+                "sample_name": files[0].name,
+                "sample": base64_data
+            }));
+        },
     };
     
 </script>
