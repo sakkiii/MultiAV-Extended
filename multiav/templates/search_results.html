@@ -42,7 +42,8 @@ $def result_data_table(plugin_name, plugin_result_data):
 
 <html>
 <head>
-<link href="/static/multiav.css" rel="stylesheet" type="text/css">
+  <link href="/static/multiav.css" rel="stylesheet" type="text/css">
+  <script src="/static/multiav.js"></script>
 </head>
 <body>
 <div class="header">
@@ -72,7 +73,9 @@ $def result_data_table(plugin_name, plugin_result_data):
       <div class="actions-body">
         <span><a href="/export/csv?q=$query">Export results as csv</a></span>      
       </div>
-      <div style="float: right;font-size: 12px;"><input type="checkbox" checked onclick="toggle_refresh()" id="refreshtoggle"> Auto refresh</input></div>
+      <div class="toggle_checkbox" style="float: right;font-size: 12px;cursor: pointer;">
+        <input type="checkbox" checked onclick="toggle_refresh()" id="refreshtoggle"> Auto refresh</input>
+      </div>
     </div>
   </div>
   $ add_autorefresh = False

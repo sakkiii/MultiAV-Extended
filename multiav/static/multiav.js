@@ -36,3 +36,12 @@ function collapse(e) {
         }
     }
 }
+
+document.addEventListener('DOMContentLoaded', function() {
+    document.querySelector(".toggle_checkbox").onclick = function(e){
+        if(e.target.localName != "input") {
+            let c = document.querySelector(".toggle_checkbox input[type=checkbox]");
+            c.checked = !c.checked;
+        }
+    };
+});

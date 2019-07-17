@@ -39,7 +39,8 @@ $def statistics_table(statistics):
 
 <html>
 <head>
-<link href="/static/multiav.css" rel="stylesheet" type="text/css">
+  <link href="/static/multiav.css" rel="stylesheet" type="text/css">
+  <script src="/static/multiav.js"></script>
 </head>
 <body>
     <div class="header">
@@ -64,7 +65,12 @@ $def statistics_table(statistics):
     </div>
     <div class="content">
         <div id="background" style="height:70px"></div>
-        <h3 style="margin-top: 45px;">MultiAV System Overview<div style="float: right;font-size: 12px;"><input type="checkbox" checked onclick="toggle_refresh()"> Auto refresh</input></div></h2>
+        <h3 style="margin-top: 45px;">
+          MultiAV System Overview
+          <div class="toggle_checkbox" style="float: right;font-size: 12px;cursor: pointer;">
+            <input type="checkbox" checked onclick="toggle_refresh()" id="refreshtoggle"> Auto refresh</input>
+          </div>
+        </h3>
         $:statistics_table(statistics)
     </div>
   <script> 

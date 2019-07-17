@@ -3,6 +3,7 @@ $def with (scanners, cpu_count, AV_SPEED)
 <head>
 <link href="/static/multiav.css" rel="stylesheet" type="text/css">
 <link href="/static/dropzone.css" rel="stylesheet" type="text/css">
+<script src="/static/multiav.js"></script>
 <script src="/static/dropzone.js"></script>
 </head>
 <body>
@@ -200,13 +201,6 @@ $def with (scanners, cpu_count, AV_SPEED)
             formdata.append("minspeed", field.value);
             field = document.querySelector("#scansettings input");
             formdata.append("allow_internet", field.checked? "true": "false");
-        }
-    };
-
-    document.querySelector(".toggle_checkbox").onclick = function(e){
-        if(e.target.localName != "input") {
-            let c = document.querySelector(".toggle_checkbox input[type=checkbox]");
-            c.checked = !c.checked;
         }
     };
     
