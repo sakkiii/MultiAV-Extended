@@ -10,20 +10,22 @@ Combine the awesome approaches of blacktop's av docker plugins with joxeankoret'
 ## MultiAV: Extended in Action
 ### Sample Upload Page
 
-![UploadImage](https://raw.githubusercontent.com/danieljampen/multiav/master/docs/images/multiav-upload.png)
+![multiav-upload](https://raw.githubusercontent.com/danieljampen/multiav/master/docs/images/multiav-upload.png)
 
 ### Scan Result Live Tracking
 
-![RunningScan](https://raw.githubusercontent.com/danieljampen/multiav/master/docs/images/multiav-scan-running.png)
+![multiav-scan-running](https://raw.githubusercontent.com/danieljampen/multiav/master/docs/images/multiav-scan-running.png)
 
 ### Search the Report DB
 
-![SearchResults](https://raw.githubusercontent.com/danieljampen/multiav/master/docs/images/multiav-search.png)
+![multiav-search](https://raw.githubusercontent.com/danieljampen/multiav/master/docs/images/multiav-search.png)
 
 ### Live System Overview
 
-![SystemOverview](https://github.com/danieljampen/multiav/blob/master/docs/images/multiav-autoscale-overview.png)
+![multiav-autoscale-overview](https://github.com/danieljampen/multiav/blob/master/docs/images/multiav-autoscale-overview.png)
 
 ### Update AntiVirus Engines
-
-![SystemOverview](https://github.com/danieljampen/multiav/blob/master/docs/images/multiav-update-in-progress.png)
+**Update in progress**
+![multiav-update-in-progress](https://github.com/danieljampen/multiav/blob/master/docs/images/multiav-update-in-progress.png)
+**Update complete**
+![multiav-update-complete](https://raw.githubusercontent.com/danieljampen/multiav/master/docs/images/multiav-update-complete.png)
