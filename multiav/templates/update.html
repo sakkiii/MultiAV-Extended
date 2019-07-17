@@ -1,7 +1,8 @@
 $def with (update_results)
 <html>
 <head>
-<link href="/static/multiav.css" rel="stylesheet" type="text/css">
+  <link href="/static/multiav.css" rel="stylesheet" type="text/css">
+  <script src="/static/multiav.js"></script>
 </head>
 <body>
   <div class="header">
@@ -26,8 +27,10 @@ $def with (update_results)
   </div>
   <div class="content">
     <div class="actionmenu content">
-      <div class="actions">
-        <div style="float: right;font-size: 12px;"><input type="checkbox" checked onclick="toggle_refresh()" id="refreshtoggle"> Auto refresh</input></div>
+      <div class="actions">        
+        <div class="toggle_checkbox" style="float: right;font-size: 12px;cursor: pointer;">
+            <input type="checkbox" checked onclick="toggle_refresh()" id="refreshtoggle"> Auto refresh</input>
+          </div>
       </div>
     </div>
   <div id="background" style="height:70px"></div>
