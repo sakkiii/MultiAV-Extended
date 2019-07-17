@@ -868,16 +868,34 @@ class AutoScaleDockerStrategy(ScannerStrategy):
             # resolve export promise
             update_promise["engine_export_promise"].get_engine_promise(engine_name).do_resolve(result)
 
-            # scp to workers
-            print("starting to copy update file {0} via scp to worker machines...".format(export_file_name))
-            scp_promises = list()
-            for machine in self._machines:
-                update_promise["scp_to_workers_start_date"][machine][engine_name] = datetime.datetime.now()
-                scp_promises.append(machine.copy_image_to_machine(engine_name, export_file_name))
-                scp_promises[-1].then(
-                    lambda res: self._post_update_file_scp(update_promise, engine_name, res, export_file_name),
-                    lambda err: update_promise["scp_to_workers_promises"][machine].get_engine_promise(engine_name).do_reject(err)
-                )
+            if len(self._machines) > 0:
+                # scp to workers
+                print("starting to copy update file {0} via scp to worker machines...".format(export_file_name))
+                scp_promises = list()
+                for machine in self._machines:
+                    update_promise["scp_to_workers_start_date"][machine][engine_name] = datetime.datetime.now()
+                    scp_promises.append(machine.copy_image_to_machine(engine_name, export_file_name))
+                    scp_promises[-1].then(
+                        lambda res: self._post_update_file_scp(update_promise, engine_name, res, export_file_name),
+                        lambda err: update_promise["scp_to_workers_promises"][machine].get_engine_promise(engine_name).do_reject(err)
+                    )
+            else:
+                # update finished for this engine
+                # resolve if all done
+                pending_promises = list(filter(
+                    lambda x: x._state == -1,
+                    update_promise["engine_export_promise"]._engine_promises.values()))
+                if len(pending_promises) == 0:
+                    print("_post_engine_export: all engine_export_promise done. resolving update_complete_promise...")
+                    # resolve update promise
+                    update_promise["update_complete_date"] = datetime.datetime.now()
+                    update_promise["update_complete_promise"].do_resolve(str(update_promise["update_complete_date"]))
+
+                    # set event to signalize the update task to release the update lock (allows scans to execute again)
+                    self._update_finished_event.set()
+                else:
+                    print("_post_engine_export: there are still some engine_export_promise pending..")
+                
         except Exception as e:
             print("EXCEPTION: _post_engine_export: {0}".format(e))
             traceback.print_exc()
@@ -1006,7 +1024,11 @@ class AutoScaleDockerStrategy(ScannerStrategy):
         }
         
         # add update task to queue => sets the event when called and blocks all other tasks
-        self.pool.add_task(self._set_update_lock)
+        if len(self._machines) > 0:
+            self.pool.add_task(self._set_update_lock)
+        else:
+            update_lock_thread = threading.Thread(target=self._set_update_lock)
+            update_lock_thread.start()
 
         # start lock watcher thread to resolve load_started_promise
         lock_watcher_thread = threading.Thread(target=self._wait_for_update_start_event, args=(update_promise,))

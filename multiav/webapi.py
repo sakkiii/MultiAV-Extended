@@ -1093,21 +1093,21 @@ class update:
       '''result = {
           "machine_id": manager_machine.id,
           "file": update_file,
-          "engine_names": [engine_name],
+          "engine_name": engine_name,
           "date": datetime.datetime.now()}'''
       if isinstance(result, Exception):
         print("webapi: exception in scp_process result detected")
         print(result)
         return
       
-      print("webapi: scp process finished: machine_id: {0} engine: {1}".format(result['machine'].id, " ".join(result['engine_names'])))
+      engine_name = result['engine_name']
+      print("webapi: scp process finished: machine_id: {0} engine: {1}".format(result['machine'].id, engine_name))
 
-      for engine_name in result['engine_names']:
-        for machine_id in list(update_results['machine_results']):
-          if update_results["update_scan_lock"]:
-            update_results['machine_results'][machine_id][engine_name] = "load"
-          else:
-            update_results['machine_results'][machine_id][engine_name] = "wait"
+      for machine_id in list(update_results['machine_results']):
+        if update_results["update_scan_lock"]:
+          update_results['machine_results'][machine_id][engine_name] = "load"
+        else:
+          update_results['machine_results'][machine_id][engine_name] = "wait"
       
       # check if all promises are resolved
       all_resolved = True

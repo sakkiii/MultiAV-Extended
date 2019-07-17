@@ -49,10 +49,13 @@ $def with (update_results)
         $if update_results["is_auto_scale_strategy"] == True:
           <dt>Engine Update complete:</dt>
           <dd>$update_results["engine_update_complete_date"]</dd>
-          <dt>SCP complete:</dt>
-          <dd>$update_results["scp_complete_date"]</dd>          
-          <dt>Load started:</dt>
-          <dd>$update_results["load_started_date"]</dd>
+          <dt>Image Export complete:</dt>
+          <dd>$update_results["engine_export_complete_date"]</dd>
+          $if len(update_results['machine_results']) > 0:
+            <dt>SCP complete:</dt>
+            <dd>$update_results["scp_complete_date"]</dd>          
+            <dt>Load started:</dt>
+            <dd>$update_results["load_started_date"]</dd>
         
         <dt>End:</dt>
         $ end_date = update_results["end_date"] if update_results["end_date"] != "-" else "-"
@@ -137,24 +140,29 @@ $def with (update_results)
           $for scanner_name in sorted(list(update_results['results'])):
             <th class="rotate"><div>$scanner_name</div></th>
         </tr>
-        $for machine_id, engine_dict in update_results['machine_results'].items():
-          <tr>
-            <td>$machine_id</td>
-            $for engine_name, value in sorted(engine_dict.items()):
-              $if value == "-":  
-                <td>-</td>
-                $ add_autorefresh = True
-              $elif value == "scp":
-                <td style="color:orange">scp</td>
-                $ add_autorefresh = True
-              $elif value == "load":
-                <td style="color:darkblue">load</td>
-                $ add_autorefresh = True
-              $elif value == "error":
-                <td style="color:darkred">err</td>
-              $else:
-                <td style="color:green">$value</td>
-          </tr>
+        $if len(update_results['machine_results']) > 0:
+          $for machine_id, engine_dict in update_results['machine_results'].items():
+            <tr>
+              <td>$machine_id</td>
+              $for engine_name, value in sorted(engine_dict.items()):
+                $if value == "-":  
+                  <td>-</td>
+                  $ add_autorefresh = True
+                $elif value == "scp":
+                  <td style="color:orange">scp</td>
+                  $ add_autorefresh = True
+                $elif value == "load":
+                  <td style="color:darkblue">load</td>
+                  $ add_autorefresh = True
+                $elif value == "error":
+                  <td style="color:darkred">err</td>
+                $else:
+                  <td style="color:green">$value</td>
+            </tr>
+        $else:
+            <tr>
+              <td colspan="$(len(update_results['results'])+1)" style="text-align: center">-</td>
+            </tr>
       </table>
   </div>
   $if add_autorefresh:
