@@ -119,17 +119,10 @@ class CDockerAvScanner():
     self.name = name
     self.speed = AV_SPEED.SLOW
     self.plugin_type = None
-    self.results = {}
     self.container_name = None
-    self.plugin_id = cfg_parser.get(self.name, "PLUGIN_ID")
-    self.docker_network_no_internet = self.cfg_parser.get("MULTIAV", "DOCKER_NETWORK_NO_INTERNET").split(".") #[10,192,212,0]
-    self.docker_network_internet = self.cfg_parser.get("MULTIAV", "DOCKER_NETWORK_INTERNET").split(".") #[10,168,137,0]
+    self.scan_timeout = int(self.cfg_parser.gets("MULTIAV", "SCAN_TIMEOUT", 120))
     self.container = None
-    self.container_api_endpoint = "scan"
-    self.container_api_sample_parameter_name = "malware"
     self.container_requires_internet = int(self.cfg_parser.gets(self.name, "ENABLE_INTERNET_ACCESS", 0)) == 1
-    self.container_api_host = self.get_api_host()
-    self.container_api_port = 3993
     self.container_build_url_override = self.cfg_parser.gets(self.name, "DOCKER_BUILD_URL_OVERRIDE", None)
     self.container_run_command_arguments = dict()
     self.container_run_docker_parameters = dict()
@@ -141,92 +134,44 @@ class CDockerAvScanner():
   
   def is_disabled(self):
     try:
-      self.cfg_parser.get(self.name, "DISABLED")
+      val = self.cfg_parser.get(self.name, "DISABLED")
+
+      if val == "0" or val.lower() == "false":
+        return False
+      
       return True
     except:
       return False
-
-  def get_api_host(self):
-    ip = []
-    if self.container_requires_internet:
-      ip = self.docker_network_internet[0:3]
-    else:
-      ip = self.docker_network_no_internet[0:3]
-
-    # add host
-    ip.append(self.plugin_id)
     
-    return ".".join(ip)
-    
-  def scan(self, path, step_by_step_commands = False):
+  def scan(self, path):
     try:
         # build request params
         filename = os.path.basename(path)
         
-        if step_by_step_commands:
-          # copy file to container
-          file_copied = False
-          current_try = 0
-          while not file_copied and current_try < 5:
-            cmd = "docker cp {0} {1}:/malware/{2}".format(path, self.container.id, filename)
-            output = self.container.machine.execute_command(cmd)
-            if "Error:" in output:
-              print("Could not copy file to target container! try: {0} output: {1}".format(current_try, output))
-              time.sleep(2)
-              current_try += 1
-            else:
-              file_copied = True
-          
-          # scan
-          cmd = "docker exec {0} {2} --timeout 120 {1}".format(self.container.id, filename, self.binary_path)
-          response = ""
-          current_try = 0
-          while len(response) < len("{\"0\":0}") and current_try < 5:
-            response = self.container.machine.execute_command(cmd)
-            response_json = response[:]
-            
-            # remove non json outputs (could be errors reported to stdout)
-            if response_json[0] != "{":
-              response_json = response_json[response_json.find("{"):]
-            if response_json[-1] != "}":
-              response_json = response_json[:response_json.rfind("}")+1]
-
-            if len(response_json) < len("{\"0\":0}"):
-              print("[{0}] Scan response contains no json string: Response: {1} - trying again...".format(self.name, response))
-              current_try += 1
-              time.sleep(2)
-          
-          # cleanup
-          if self.container.max_scans_per_container != 1:
-            cmd = "docker exec {0} rm /malware/{1}".format(self.container.id, filename)
-            output = self.container.machine.execute_command(cmd)
-            if "rm:" in output:
-              print("Could not cleanup file {0} from target container {1} on machine {2}".format("/malware/" + filename, self.container.id, self.container.machine.id))
+        if self.container.machine.max_scans_per_container == 1:
+          # run and scan command only, container is removed post scan by docker
+          run_cmd = self.container.get_run_and_scan_command(filename)
+          response = self.container.machine.execute_command(run_cmd)
         else:
-          if self.container.machine.max_scans_per_container == 1:
-            # run and scan command only, container is removed post scan by docker
-            run_cmd = self.container.get_run_and_scan_command(filename)
-            response = self.container.machine.execute_command(run_cmd)
-          else:
-            '''
-            e.g.
-            sudo docker cp /tmp/tmp_f5nzdm1 multiav-clamav-TEST:/malware/tmp_f5nzdm1 > /dev/null 2>&1; 
-            sudo docker exec multiav-clamav-TEST /bin/avscan /malware/tmp_f5nzdm1; 
-            sudo docker exec multiav-clamav-TEST rm /malware/tmp_f5nzdm1 > /dev/null 2>&1"
-            '''
-            copy_cmd = "docker cp {0} {1}:/malware/{2} > /dev/null 2>&1".format(path, self.container.id, filename)
-            scan_cmd = "docker exec {0} {2} --timeout 120 {1}".format(self.container.id, filename, self.binary_path)
-            cleanup_cmd = "docker exec {0} rm /malware/{1} > /dev/null 2>&1".format(self.container.id, filename)
+          '''
+          e.g.
+          sudo docker cp /tmp/tmp_f5nzdm1 multiav-clamav-TEST:/malware/tmp_f5nzdm1 > /dev/null 2>&1; 
+          sudo docker exec multiav-clamav-TEST /bin/avscan /malware/tmp_f5nzdm1; 
+          sudo docker exec multiav-clamav-TEST rm /malware/tmp_f5nzdm1 > /dev/null 2>&1"
+          '''
+          copy_cmd = "docker cp {0} {1}:/malware/{2} > /dev/null 2>&1".format(path, self.container.id, filename)
+          scan_cmd = "docker exec {0} {2} --timeout {3} {1}".format(self.container.id, filename, self.binary_path, self.scan_timeout)
+          cleanup_cmd = "docker exec {0} rm /malware/{1} > /dev/null 2>&1".format(self.container.id, filename)
 
-            cmd = " && ".join([copy_cmd, scan_cmd, cleanup_cmd])
-            response = self.container.machine.execute_command(cmd)
+          cmd = " && ".join([copy_cmd, scan_cmd, cleanup_cmd])
+          response = self.container.machine.execute_command(cmd)
 
-          # remove non json outputs (could be errors reported to stdout)
-          response_json = response[:]
-          if response_json[0] != "{":
-            response_json = response_json[response_json.find("{"):]
-          if response_json[-1] != "}":
-            response_json = response_json[:response_json.rfind("}")+1]
+        # remove non json outputs (could be errors reported to stdout)
+        response_json = response[:]
+        if response_json[0] != "{":
+          response_json = response_json[response_json.find("{"):]
+        if response_json[-1] != "}":
+          response_json = response_json[:response_json.rfind("}")+1]
         
         # dont try to deserialize if empty result
         if len(response_json) < len("{\"0\":0}"):
@@ -355,8 +300,6 @@ class CFlossMalicePlugin(CDockerAvScanner):
     self.speed = AV_SPEED.FAST
     self.plugin_type = PLUGIN_TYPE.AV
     self.container_name = "zoner"
-    self.container_api_port = cfg_parser.get(self.name, "API_PORT")
-    self.container_restart_after_query = cfg_parser.get(self.name, "RESTART_CONTAINER_AFTER_QUERY")
     self.container_enviroment_variables["ZONE_KEY"] = cfg_parser.get(self.name, "LICENSE_KEY")'''
 
 #-----------------------------------------------------------------------
@@ -485,7 +428,6 @@ class CShadowServerMalicePlugin(CDockerHashLookupService):
     self.speed = AV_SPEED.FAST
     self.plugin_type = PLUGIN_TYPE.INTEL
     self.container_name = "shadow-server"
-    self.container_api_endpoint = "lookup"
     self.binary_path = "/bin/shadow-server"
     self.update_command_supported = False
 
@@ -496,7 +438,6 @@ class CVirusTotalMalicePlugin(CDockerHashLookupService):
     self.speed = AV_SPEED.FAST
     self.plugin_type = PLUGIN_TYPE.INTEL
     self.container_name = "virustotal"
-    self.container_api_endpoint = "lookup"
     self.container_run_command_arguments["--api"] = cfg_parser.get(self.name, "API_KEY")
     self.binary_path = "/bin/virustotal"
     self.update_command_supported = False
@@ -508,7 +449,6 @@ class CNationalSoftwareReferenceLibraryMalicePlugin(CDockerHashLookupService):
     self.speed = AV_SPEED.FAST
     self.plugin_type = PLUGIN_TYPE.INTEL
     self.container_name = "nsrl"
-    self.container_api_endpoint = "lookup"
     self.binary_path = "/bin/nsrl"
     self.update_command_supported = False
 
