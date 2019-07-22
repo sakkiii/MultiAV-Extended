@@ -462,6 +462,14 @@ class CIkarusMalicePlugin(CDockerAvScanner):
     self.container_run_docker_parameters["--shm-size"] = "256m" # default is 64m. Bus error on scan if omitted
 
 #-----------------------------------------------------------------------
+class CAviraMalicePlugin(CDockerAvScanner):
+  def __init__(self, cfg_parser):
+    CDockerAvScanner.__init__(self, cfg_parser, "Avira")
+    self.speed = AV_SPEED.FAST
+    self.plugin_type = PLUGIN_TYPE.AV
+    self.container_name = "avira"
+
+#-----------------------------------------------------------------------
 class InvalidScannerStrategyException(Exception):
   pass
 
@@ -475,7 +483,7 @@ class CMultiAV:
                     CFSecureMalicePlugin, CKasperskyMalicePlugin, CMcAfeeMalicePlugin,
                     CYaraMalicePlugin, CShadowServerMalicePlugin, CVirusTotalMalicePlugin,
                     CNationalSoftwareReferenceLibraryMalicePlugin, CPEScanMalicePlugin, 
-                    CFlossMalicePlugin, CIkarusMalicePlugin]
+                    CFlossMalicePlugin, CIkarusMalicePlugin, CAviraMalicePlugin]
 
     self.processes = cpu_count()
     self.parser = config_parser

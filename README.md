@@ -16,28 +16,29 @@ Combine the awesome approaches of blacktop's av docker plugins with joxeankoret'
 * **Reproducible, reliable results** - Reports specially designed to contain all information required to reproduce scan results
 * **Effortless updating** - One click AV engine update, guarantee that the shown av versions are used for scans (no unnoticed updates possible by design)
 * **Multiple scanning strategies** - define how your scans are executed / scheduled. Locally, Locally with a global limit or using the powerfull **auto scaleing system** supporting 17 hypervisors and cloud computing services
-* **Scan samples with 13 AV plugins**:
-  * Windows Defender - Repo: [here](https://github.com/malice-plugins/windows-defender)
-  * Sophos - Repo: [here](https://github.com/malice-plugins/sophos)
+* **Scan samples with 14 AV plugins**:
   * Avast[**Requires License**] - Repo: [here](https://github.com/malice-plugins/avast)
   * Avg - Repo: [here](https://github.com/malice-plugins/avg)
+  * Avira[**Requires License**] - Repo: [here](https://github.com/malice-plugins/avira)
   * BitDefender - Repo: [here](https://github.com/malice-plugins/bitdefender)
-  * ClamAV - Repo: [here](https://github.com/malice-plugins/clamav)
   * Comodo - Repo: [here](https://github.com/malice-plugins/comodo)
+  * ClamAV - Repo: [here](https://github.com/malice-plugins/clamav)
   * DrWeb - Repo: [here](https://github.com/malice-plugins/drweb)
-  * EScan - Repo: [here](https://github.com/malice-plugins/escan)
   * FProt - Repo: [here](https://github.com/malice-plugins/fprot)
+  * EScan - Repo: [here](https://github.com/malice-plugins/escan)
   * FSecure - Repo: [here](https://github.com/malice-plugins/fsecure)
   * Kaspersky[**Requires License**] - Repo: [here](https://github.com/malice-plugins/kaspersky)
   * McAfee - Repo: [here](https://github.com/malice-plugins/mcafee)
+  * Sophos - Repo: [here](https://github.com/malice-plugins/sophos)
+  * Windows Defender - Repo: [here](https://github.com/malice-plugins/windows-defender)
 * **Gain additional information using 7 Intel, File format or Metadata plugins**:
   * FileInfo (exiftool, TRiD and ssdeep) - Repo: [here](https://github.com/malice-plugins/fileinfo)
-  * Yara - Repo: [here](https://github.com/malice-plugins/yara)
-  * ShadowServer - Repo: [here](https://github.com/malice-plugins/shadow-server)
-  * VirusTotal - Repo: [here](https://github.com/malice-plugins/virustotal)
+  * Floss - Repo: [here](https://github.com/malice-plugins/floss)
   * NationalSoftwareReferenceLibrary - Repo: [here](https://github.com/malice-plugins/nsrl)
   * PEScan - Repo: [here](https://github.com/malice-plugins/pescan)
-  * Floss - Repo: [here](https://github.com/malice-plugins/floss)
+  * ShadowServer - Repo: [here](https://github.com/malice-plugins/shadow-server)
+  * VirusTotal - Repo: [here](https://github.com/malice-plugins/virustotal)
+  * Yara - Repo: [here](https://github.com/malice-plugins/yara)
 
 ## MultiAV: Extended in Action
 ### Sample Upload Page
