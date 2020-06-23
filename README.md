@@ -20,7 +20,7 @@ Combine the awesome approaches of blacktop's av docker plugins with joxeankoret'
   * Avast[**Requires License**] - Repo: [here](https://github.com/malice-plugins/avast)
   * Avg - Repo: [here](https://github.com/malice-plugins/avg)
   * Avira[**Requires License**] - Repo: [here](https://github.com/malice-plugins/avira)
-  * BitDefender - Repo: [here](https://github.com/malice-plugins/bitdefender)
+  * BitDefender[**Requires License**] - Repo: [here](https://github.com/malice-plugins/bitdefender)
   * Comodo - Repo: [here](https://github.com/malice-plugins/comodo)
   * ClamAV - Repo: [here](https://github.com/malice-plugins/clamav)
   * DrWeb - Repo: [here](https://github.com/malice-plugins/drweb)
@@ -36,8 +36,7 @@ Combine the awesome approaches of blacktop's av docker plugins with joxeankoret'
   * Floss - Repo: [here](https://github.com/malice-plugins/floss)
   * NationalSoftwareReferenceLibrary - Repo: [here](https://github.com/malice-plugins/nsrl)
   * PEScan - Repo: [here](https://github.com/malice-plugins/pescan)
-  * ShadowServer - Repo: [here](https://github.com/malice-plugins/shadow-server)
-  * VirusTotal - Repo: [here](https://github.com/malice-plugins/virustotal)
+  * VirusTotal[**Requires API Key**] - Repo: [here](https://github.com/malice-plugins/virustotal)
   * Yara - Repo: [here](https://github.com/malice-plugins/yara)
 
 ## MultiAV: Extended in Action

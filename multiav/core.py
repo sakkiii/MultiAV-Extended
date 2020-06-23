@@ -229,9 +229,9 @@ class CDockerHashLookupService(CDockerAvScanner):
       filehash = sha1(buf).hexdigest()
 
       # scan
-      cmd = "docker exec {0} {1} lookup {2}".format(self.container.id, self.binary_path, filehash)
-      response = ""
+      cmd = self.container.get_run_and_scan_command("lookup {0}".format(filehash))
 
+      response = ""
       while len(response) < len("{\"0\":0}"):
         response = self.container.machine.execute_command(cmd)
         if len(response) < len("{\"0\":0}"):
