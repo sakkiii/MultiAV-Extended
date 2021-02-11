@@ -1,6 +1,6 @@
 bumpversion==0.5.3
-wheel==0.23.0
-web.py==0.40-dev1
+wheel==0.36.2
+web.py==0.62
 rwlock==0.0.7
-promise==2.2.1
-requests==2.18.4
+promise==2.3
+requests==2.25.1
