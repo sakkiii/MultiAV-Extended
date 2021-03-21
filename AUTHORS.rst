@@ -5,9 +5,8 @@ Credits
 Development Lead
 ----------------
 
-* Joxean Koret <admin@joxeankoret.com>
+* sakkiii <admin@sakkiii.com>
 
 Contributors
 ------------
-
-None yet. Why not be the first?
+Thanx to @jampe @joxeankoret
