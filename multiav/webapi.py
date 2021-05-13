@@ -418,7 +418,7 @@ class CDbSamples:
             print(e)
 
         # insert new scanner if none existed)
-        if updated_rows is 0:
+        if updated_rows == 0:
             self.insert_scanner(
                 name=name,
                 plugin_type=plugin_type,

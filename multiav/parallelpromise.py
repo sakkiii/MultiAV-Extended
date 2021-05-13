@@ -25,16 +25,18 @@ class ParallelPromise(Promise):
             raise Exception("Timeout")
 
     def _resolve_from_executor(self, executor):
+        """
         # type: (Callable[[Callable[[T], None], Callable[[Exception], None]], None]) -> None
         # self._capture_stacktrace()
+        """
         synchronous = True
 
         def resolve(value):
-            # type: (T) -> None
+            """# type: (T) -> None"""
             self._resolve_callback(value)
 
         def reject(reason, traceback=None):
-            # type: (Exception, TracebackType) -> None
+            """# type: (Exception, TracebackType) -> None"""
             self._reject_callback(reason, synchronous, traceback)
 
         error = None
