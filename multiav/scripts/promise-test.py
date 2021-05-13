@@ -1,11 +1,12 @@
 import time
 import threading
-import asyncio
 import sys
 import uuid
-import random
 
-from timer_cm import Timer
+try:
+    from timer_cm import Timer
+except ImportError:
+    print("Run cmd -> pip install timer-cm")
 from promise import Promise
 from rwlock import RWLock
 
@@ -16,8 +17,10 @@ if IS_PY2:
 else:
     from queue import Queue
 
+
 class Worker(threading.Thread):
     """ Thread executing tasks from a given tasks queue """
+
     def __init__(self, tasks):
         threading.Thread.__init__(self)
         self.tasks = tasks
@@ -36,7 +39,7 @@ class Worker(threading.Thread):
                 try:
                     # run task and resolve with return value
                     # will execute the function doing the http request. it's therefor usable for all plugins
-                    resolve(func(*args, **kargs))                    
+                    resolve(func(*args, **kargs))
                 except Exception as e:
                     # reject promise with exception
                     reject(e)
@@ -58,7 +61,8 @@ class Worker(threading.Thread):
 
 class ThreadPool:
     """ Pool of threads consuming tasks from a queue """
-    def __init__(self, num_threads, workers_maxsize = 0):
+
+    def __init__(self, num_threads, workers_maxsize=0):
         self.workers_maxsize = workers_maxsize
         self.tasks = Queue()
         self.min_threads = num_threads
@@ -66,12 +70,12 @@ class ThreadPool:
 
         for _ in range(num_threads):
             self.workers.append(Worker(self.tasks))
-    
+
     def _find_workers_to_remove(self):
-        queue_size= self.get_queue_size()
+        queue_size = self.get_queue_size()
         if queue_size >= self.get_worker_amount():
             return []
-                
+
         idle_workers = list(filter(lambda w: not w.working, self.workers))
         total_idle_workers = len(idle_workers)
         max_removalble_workers = self.get_worker_amount() - self.min_threads
@@ -87,11 +91,12 @@ class ThreadPool:
 
         if amount <= 0:
             return
-        
-        amount = amount if len(self.workers) + amount <= self.workers_maxsize else self.workers_maxsize - len(self.workers)
+
+        amount = amount if len(self.workers) + amount <= self.workers_maxsize else self.workers_maxsize - len(
+            self.workers)
         for _ in range(amount):
             self.workers.append(Worker(self.tasks))
-        
+
         if amount != 0:
             print("created {0} new worker(s)".format(amount))
 
@@ -105,7 +110,7 @@ class ThreadPool:
         for worker in workers:
             worker.mark_for_removal()
             self.workers.remove(worker)
-        
+
         print("marked {0} worker(s) for removal".format(len(workers)))
 
     def get_queue_size(self):
@@ -137,6 +142,7 @@ class ThreadPool:
         """ Wait for completion of all the tasks in the queue """
         self.tasks.join()
 
+
 class Strategy:
     def _scan_internal(self, strategy_name, engine, file_buffer, duration):
         self._pre_scan(engine, file_buffer)
@@ -156,6 +162,7 @@ class Strategy:
     def scan(self, engine, file_buffer, duration):
         pass
 
+
 class LocalDockerStrategy(Strategy):
     def __init__(self, num_threads):
         # use thread pool to handle overload without scaling
@@ -164,11 +171,12 @@ class LocalDockerStrategy(Strategy):
 
     def scan(self, engine, file_buffer, duration):
         scan_promise = self.pool.add_task(self._scan_internal, "LocalDockerStrategy", engine, file_buffer, duration)
-        #return Promise.promisify(self._scan_internal)(, engine, file_buffer, duration)
+        # return Promise.promisify(self._scan_internal)(, engine, file_buffer, duration)
         return scan_promise
-    
+
     def wait_completion(self):
         self.pool.wait_completion()
+
 
 class JustRunLocalDockerStrategy(Strategy):
     def __init__(self):
@@ -183,7 +191,7 @@ class JustRunLocalDockerStrategy(Strategy):
             finally:
                 # make sure to remove thread from running list
                 self.threads.remove(thread)
-        
+
         thread = threading.Thread(target=fn)
         thread.start()
         self.threads.append(thread)
@@ -205,6 +213,7 @@ class JustRunLocalDockerStrategy(Strategy):
         if not waited:
             raise Exception("Timeout")
 
+
 class DockerMachine():
     def __init__(self, max_containers_per_machine, max_scans_per_container):
         self.id = str(uuid.uuid1())
@@ -220,11 +229,12 @@ class DockerMachine():
 
     def _create_container(self, engine):
         with self._lock.writer_lock:
-            container = DockerContainer([10,10,20,10], 8080, engine, self.max_scans_per_container, self)
+            container = DockerContainer([10, 10, 20, 10], 8080, engine, self.max_scans_per_container, self)
             self.containers.append(container)
-            print("Created docker container {0} with engine: {1} on machine {2}".format(container.id, container.engine.name, self.id))
+            print("Created docker container {0} with engine: {1} on machine {2}".format(container.id,
+                                                                                        container.engine.name, self.id))
             return container
-    
+
     def try_do_scan(self, engine, report_id):
         if self.max_scans_per_container == 1:
             # do we have the resources to add a new container?
@@ -236,9 +246,9 @@ class DockerMachine():
                 container = self._create_container(engine)
                 if not container.try_do_scan(report_id):
                     return None, None
-                
+
                 return container, self
-        
+
         # multiple scans per container are allowed
         with self._lock.reader_lock:
             if len(self.containers) != 0:
@@ -247,15 +257,15 @@ class DockerMachine():
                     if container.engine == engine and container.try_do_scan(report_id):
                         print("using container for multiple scans")
                         return container, self
-            
+
             # create a new container for scan
         with self._lock.writer_lock:
             container = self._create_container(engine)
             if not container.try_do_scan(report_id):
                 return None, None
-            
-            return container, self       
-    
+
+            return container, self
+
     def remove_scan_from_container_by_ip(self, ip, report_id):
         for container in self.containers:
             if container.ip == ip:
@@ -263,7 +273,10 @@ class DockerMachine():
 
                 if len(container.scans) == 0:
                     self.containers.remove(container)
-                    print("removed container {0} with engine {1} from machine {2}".format(container.id, container.engine.name, self.id))
+                    print("removed container {0} with engine {1} from machine {2}".format(container.id,
+                                                                                          container.engine.name,
+                                                                                          self.id))
+
 
 class DockerContainer():
     def __init__(self, ip, port, engine, max_scans_per_container, machine):
@@ -275,12 +288,12 @@ class DockerContainer():
         self._lock = RWLock()
         self._machine = machine
         self.max_scans_per_container = max_scans_per_container
-    
+
     def _run_command(self, command):
         cmd = "eval $(docker-machine env {0}); {1}; eval $(docker-machine env -u)".format(self._machine.id, command)
-        #output = check_output(cmd.split[" "])
+        # output = check_output(cmd.split[" "])
         print(cmd)
-        
+
     def _create_continer(self):
         pass
 
@@ -288,40 +301,44 @@ class DockerContainer():
         with self._lock.reader_lock:
             if len(self.scans) >= self.max_scans_per_container:
                 return False
-            
+
         with self._lock.writer_lock:
             self.scans.append(report_id)
             return True
-    
+
     def remove_scan(self, report_id):
         with self._lock.reader_lock:
             if not report_id in self.scans:
                 return False
-            
+
         with self._lock.writer_lock:
             self.scans.remove(report_id)
             return True
-        
+
+
 class AutoScaleDockerStrategy(Strategy):
     def __init__(self, max_machines, max_containers_per_machine, max_scans_per_container):
         # use thread pool to handle overload when maxed out scaling => tasks will stay in queue
         min_threads = max_containers_per_machine * max_scans_per_container
         max_threads = max_machines * max_containers_per_machine * max_scans_per_container
         self.pool = ThreadPool(min_threads, max_threads)
-        print("AutoScaleDockerStrategy: initialized thread pool using {0} threads (max: {1})".format(min_threads, max_threads))
+        print("AutoScaleDockerStrategy: initialized thread pool using {0} threads (max: {1})".format(min_threads,
+                                                                                                     max_threads))
 
         self._machines = []
         self.max_machines = max_machines
         self.max_containers_per_machine = max_containers_per_machine
         self.max_scans_per_container = max_scans_per_container
-        print("AutoScaleDockerStrategy: initialized using max_machines: {0} max_containers_per_machine: {1} max_scans_per_container: {2}".format(max_machines, max_containers_per_machine, max_scans_per_container))
+        print(
+            "AutoScaleDockerStrategy: initialized using max_machines: {0} max_containers_per_machine: {1} max_scans_per_container: {2}".format(
+                max_machines, max_containers_per_machine, max_scans_per_container))
 
     def _pre_scan(self, engine, file_buffer):
         # call scan now to get a machine and container for the scan
         container = self._get_container_for_scan(engine, file_buffer)
 
         # set container ip for engine
-        #engine.set_endpoints_from_container(container)
+        # engine.set_endpoints_from_container(container)
         engine.ip = container.ip
         self._print_machine_stats()
 
@@ -330,12 +347,12 @@ class AutoScaleDockerStrategy(Strategy):
         ip = engine.ip
         self._remove_scan_from_container_by_ip(ip, file_buffer)
         self._print_machine_stats()
-    
+
     def _print_machine_stats(self):
         for m in self._machines:
             engines = ",".join(list(map(lambda c: c.engine.name, m.containers)))
-            print("--- STATS: Machine {0} Containers {1} ({2})".format(m.id, len(m.containers),  engines))
-    
+            print("--- STATS: Machine {0} Containers {1} ({2})".format(m.id, len(m.containers), engines))
+
     def _remove_scan_from_container_by_ip(self, ip, report_id):
         removable_machines = []
         machines_with_free_spots = []
@@ -345,14 +362,14 @@ class AutoScaleDockerStrategy(Strategy):
                 removable_machines.append(m)
             elif len(m.containers) < self.max_containers_per_machine:
                 machines_with_free_spots.append(m)
-        
+
         if len(removable_machines) > 1 or len(machines_with_free_spots) != 0:
             if len(removable_machines):
                 # remove all but one machine (let it run in case we need a spot)
                 for m in removable_machines[1:]:
                     self._shutdown_machine(m)
                     removable_machines.remove(m)
-            
+
             if len(machines_with_free_spots) and self.pool.get_queue_size() == 0:
                 # if there's free spots on the running machines and the queue is empty, remove the empty one anyway
                 for m in removable_machines:
@@ -366,7 +383,7 @@ class AutoScaleDockerStrategy(Strategy):
         self._machines.append(machine)
         print("starting new machine {0}".format(machine.id))
         return machine
-    
+
     def _shutdown_machine(self, machine):
         self._machines.remove(machine)
         print("shutting down machine {0}!".format(machine.id))
@@ -375,13 +392,13 @@ class AutoScaleDockerStrategy(Strategy):
         container = None
         machine = None
 
-        # search for a free spot on a running machine 
+        # search for a free spot on a running machine
         for m in self._machines:
             container, machine = m.try_do_scan(engine, report_id)
             if container is not None:
                 print("found container {0} on machine {1}".format(container.id, machine.id))
                 break
-            
+
         if container is None:
             m = self._create_machine()
             container, machine = m.try_do_scan(engine, report_id)
@@ -391,7 +408,7 @@ class AutoScaleDockerStrategy(Strategy):
             print("found container {0} on machine {1}".format(container.id, machine.id))
 
         return container
-    
+
     def scan(self, engine, file_buffer, duration):
         scan_promise = self.pool.add_task(self._scan_internal, "AutoScaleDockerStrategy", engine, file_buffer, duration)
 
@@ -403,23 +420,24 @@ class AutoScaleDockerStrategy(Strategy):
             self.pool.add_worker()
 
         return scan_promise
-    
+
     def wait_completion(self):
         self.pool.wait_completion()
+
 
 # this is basically a promise for the whole scan and for all subscans. use engine_then to setup the subtask callbacks
 class ScanPromise(Promise):
     def __init__(self):
         Promise.__init__(self)
         self.engine_promises = []
-    
+
     def _did_all_engine_promises_run(self, res):
         ret = True
         all_fulfilled = True
         for engine_promise in self.engine_promises:
             ret &= engine_promise._state != -1
             all_fulfilled &= engine_promise._state == 1
-        
+
         if ret:
             if all_fulfilled:
                 self.do_resolve("All done")
@@ -433,15 +451,18 @@ class ScanPromise(Promise):
 
         return self
 
+
 class Engine():
     def __init__(self, name, duration, ip):
         self.name = name
         self.ip = ip
         self.duration = duration
 
+
 class MultiScanner:
     def __init__(self, strategy):
-        self.engines = [Engine("sophos", 4, list()), Engine("defender", 2, list()), Engine("clam", 1, list()), Engine("ikarus", 2, list()), Engine("trendmicro", 3, list()), Engine("kaspersky", 2, list())]
+        self.engines = [Engine("sophos", 4, list()), Engine("defender", 2, list()), Engine("clam", 1, list()),
+                        Engine("ikarus", 2, list()), Engine("trendmicro", 3, list()), Engine("kaspersky", 2, list())]
 
         if isinstance(strategy, Strategy):
             self.docker_strategy = strategy
@@ -454,12 +475,13 @@ class MultiScanner:
         for engine in self.engines:
             engine_promise = self.docker_strategy.scan(engine, file_buffer, engine.duration)
             scan_promise.engine_promises.append(engine_promise)
-        
+
         return scan_promise
+
 
 if __name__ == "__main__":
     with Timer('Execution time') as timer:
-        # scanner 
+        # scanner
         local_docker_strategy = LocalDockerStrategy(2)
         just_run_docker_strategy = JustRunLocalDockerStrategy()
 
@@ -469,32 +491,32 @@ if __name__ == "__main__":
 
         # add tasks
         t1 = ms.scan("task 1").engine_then(
-            lambda res: print("did_fulfill: "+ res),
+            lambda res: print("did_fulfill: " + res),
             lambda res: print("did_reject: " + res)
         ).then(
-            lambda res: print("DONE did_fulfill: "+ res),
+            lambda res: print("DONE did_fulfill: " + res),
             lambda res: print("DONE did_reject: " + res)
         )
 
         t2 = ms.scan("task 2").engine_then(
-            lambda res: print("did_fulfill: "+ res),
+            lambda res: print("did_fulfill: " + res),
             lambda res: print("did_reject: " + res)
         ).then(
-            lambda res: print("DONE did_fulfill: "+ res),
+            lambda res: print("DONE did_fulfill: " + res),
             lambda res: print("DONE did_reject: " + res)
         )
         t3 = ms.scan("task 3").engine_then(
-            lambda res: print("did_fulfill: "+ res),
+            lambda res: print("did_fulfill: " + res),
             lambda res: print("did_reject: " + res)
         ).then(
-            lambda res: print("DONE did_fulfill: "+ res),
+            lambda res: print("DONE did_fulfill: " + res),
             lambda res: print("DONE did_reject: " + res)
         )
         t4 = ms.scan("task 4").engine_then(
-            lambda res: print("did_fulfill: "+ res),
+            lambda res: print("did_fulfill: " + res),
             lambda res: print("did_reject: " + res)
         ).then(
-            lambda res: print("DONE did_fulfill: "+ res),
+            lambda res: print("DONE did_fulfill: " + res),
             lambda res: print("DONE did_reject: " + res)
         )
 
@@ -503,7 +525,7 @@ if __name__ == "__main__":
         # makes it possible to cancel the thread pool with an exception when
         # the currently running batch of workers is finished.
         print("Tasks added. Waiting for completion")
-        
+
         if ms.docker_strategy == local_docker_strategy:
             local_docker_strategy.wait_completion()
         elif ms.docker_strategy == just_run_docker_strategy:
@@ -513,8 +535,9 @@ if __name__ == "__main__":
             just_run_docker_strategy.wait(t4)
         elif ms.docker_strategy == auto_scale_strategy:
             auto_scale_strategy.wait_completion()
-            print("worker count: {0}, queue size: {1} machines up: {2}".format(auto_scale_strategy.pool.get_worker_amount(), auto_scale_strategy.pool.get_queue_size(), len(auto_scale_strategy._machines)))
+            print("worker count: {0}, queue size: {1} machines up: {2}".format(
+                auto_scale_strategy.pool.get_worker_amount(), auto_scale_strategy.pool.get_queue_size(),
+                len(auto_scale_strategy._machines)))
             for m in auto_scale_strategy._machines:
                 print("machine {0} with {1} container(s)".format(m.id, len(m.containers)))
-        
     print("end")

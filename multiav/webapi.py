@@ -91,9 +91,9 @@ class CDbSamples:
     def __init__(self, cfg_parser=parser):
         self.cfg_parser = cfg_parser
         self.plugin = self.cfg_parser.gets("MULTIAV", "DATABASE_PLUGIN", "postgres")
-        self.name = self.cfg_parser.gets("MULTIAV", "DATABASE_NAME", "mars")
-        self.user = self.cfg_parser.gets("MULTIAV", "DATABASE_USER", "mars")
-        self.passwd = self.cfg_parser.gets("MULTIAV", "DATABASE_PASSWORD", "m@rs6759$%!@")
+        self.name = self.cfg_parser.gets("MULTIAV", "DATABASE_NAME", "default-db")
+        self.user = self.cfg_parser.gets("MULTIAV", "DATABASE_USER", "default-user")
+        self.passwd = self.cfg_parser.gets("MULTIAV", "DATABASE_PASSWORD", "default-pass")
         self.host = self.cfg_parser.gets("MULTIAV", "DATABASE_HOST", "localhost")
         self.db = web.database(dbn=self.plugin, db=self.name, user=self.user, pw=self.passwd, host=self.host)
         self.db.printing = False
@@ -184,7 +184,8 @@ class CDbSamples:
             with self.reports_lock.writer_lock:
                 with self.db.transaction():
                     # insert sample if not exists
-                    query = "INSERT INTO samples(name, md5, sha1, sha256, size) SELECT $name, $md5, $sha1, $sha256, $size WHERE NOT EXISTS(SELECT 1 FROM samples WHERE sha256 = $sha256)"
+                    query = "INSERT INTO samples(name, md5, sha1, sha256, size) SELECT $name, $md5, $sha1, $sha256, " \
+                            "$size WHERE NOT EXISTS(SELECT 1 FROM samples WHERE sha256 = $sha256) "
                     self.db.query(query, vars={"name": name, "md5": md5_hash, "sha1": sha1_hash, "sha256": sha256_hash,
                                                "size": size})
 
@@ -197,7 +198,8 @@ class CDbSamples:
                                                sample_id=sample_id)
 
                     return report_id
-        except:
+        except Exception as e:
+            print("Error Summary:", str(e))
             print("Error:", sys.exc_info()[1], md5_hash, sha1_hash, sha256_hash)
             return -1
 
@@ -257,9 +259,9 @@ class CDbSamples:
                         # no row updated, probably update called prior to add => it's a race
                         self.add_scan_result(report_id, result, queued, scanning)
 
-        except Exception as e:
+        except Exception as e1:
             print("webapi: update_scan_result exception! report_id: {0} result: {1}".format(report_id, result))
-            print(e)
+            print(e1)
 
     def search_results_by_report_id(self, report_id):
         with self.reports_lock.reader_lock:
@@ -279,7 +281,8 @@ class CDbSamples:
     def search_report_by_id(self, report_id):
         with self.reports_lock.reader_lock:
             with self.db.transaction():
-                query = "SELECT reports.id,samples.name,samples.md5,samples.sha1,samples.sha256,samples.size,reports.infected,reports.start_date,reports.end_date " \
+                query = "SELECT reports.id,samples.name,samples.md5,samples.sha1,samples.sha256,samples.size," \
+                        "reports.infected,reports.start_date,reports.end_date " \
                         "FROM samples " \
                         "LEFT JOIN reports ON samples.id = reports.sample_id " \
                         "WHERE reports.id = $report_id"
@@ -646,17 +649,17 @@ class export_csv:
         nabled': 'True', 'PrefsDataDevMode': 'False', 'PrefsDataEdgeScreenScroll': 'True', 'PrefsDataExtremeDifficultyUnlocked': 'True', 'PrefsDataFullscreen': 'True', 'PrefsDataHatsOnlyOnMap': 'False', 'PrefsDataLangFolderName': 'English', 'PrefsDataLogVerbose': 'False', 'PrefsDataMaxNumberOfPlayerSettlements': '1', 'Prefs
         DataPauseOnError': 'False', 'PrefsDataPauseOnLoad': 'False', 'PrefsDataPauseOnUrgentLetter': 'True', 'PrefsDataPlantWindSway': 'True', 'PrefsDataPreferredNames': '', 'PrefsDataResetModsConfigOnCrash': 'True', 'PrefsDataResourceReadoutCategorized': 'True', 'PrefsDataRunInBackground': 'True', 'PrefsDataScreenHeight':
         '1440', 'PrefsDataScreenWidth': '2560', 'PrefsDataShowRealtimeClock': 'True', 'PrefsDataTemperatureMode': 'Celsius', 'PrefsDataTestMapSizes': 'False', 'PrefsDataUiScale': '1', 'PrefsDataVolumeAmbient': '1', 'PrefsDataVolumeGame': '0.8', 'PrefsDataVolumeMusic': '0.4'}, 'name': 'FileInfo', 'plugin_type': 2, 'speed': -
-        1, 'has_internet': False, 'queued': 0, 'scanning': 0}, 
-        {'infected': False, 'result': '', 'engine': '4.6.5.141', 'updated': '20190509', 'name': 'FProt', 'plugin_type': 1, 'speed': 0, 'has_internet': False, 'queued': 0, 'scanning': 0}, 
-        {'infected': False, 'result': '', 'engine': '3.0.0', 'database': '19050802', 'updated': '20190508', 'name': 'Avast', 'plugin_type': 1, 'speed': 0, 'has_internet': False, 'queued': 0, 'scanning': 0}, 
-        {'infected': False, 'result': '', 'engine': '', 'database': '', 'updated': '', 'error': 'exit status 2', 'name': 'Avg', 'plugin_type': 1, 'speed': -1, 'has_internet': False, 'queued': 0, 'scanning': 0}, 
-        {'infected': False, 'result': '', 'engine': '7.141118', 'updated': '20190509', 'name': 'BitDefender', 'plugin_type': 1, 'speed': 1, 'has_internet': False, 'queued': 0, 'scanning': 0}, 
-        {'infected': False, 'result': '', 'engine': '0.100.2', 'known': '6802108', 'updated': '20190509', 'name': 'ClamAV', 'plugin_type':1, 'speed': -1, 'has_internet': False, 'queued': 0, 'scanning': 0}, 
-        {'infected': False, 'result': '', 'engine': '5.0.163652.1142', 'updated': '20190509', 'name': 'Comodo', 'plugin_type': 1, 'speed': 0, 'has_internet': False, 'queued': 0, 'scanning': 0}, 
-        {'infected': False, 'result': '', 'engine': '7.0-20', 'updated': '20190509', 'name': 'EScan', 'plugin_type': 1, 'speed': 0, 'has_internet': False, 'queued': 0, 'scanning': 0}, 
-        {'infected': False, 'result': '', 'results': {'fse': '', 'aquarius': ''}, 'engine': '11.10 build 68', 'database': '2019-05-01_03', 'updated': '20190509', 'name': 'FSecure', 'plugin_type': 1, 'speed': 1, 'has_internet': False, 'queued': 0, 'scanning': 0}, 
-        {'infected': False, 'result': '', 'engine': '5600.1067', 'database': '9251', 'updated': '20190509', 'name': 'McAfee', 'plugin_type': 1, 'speed': 0, 'has_internet': False, 'queued': 0, 'scanning': 0}, 
-        {'infected': False, 'result': '', 'engine': '5.01.05', 'database':'09.05.2019 07:41:53 (Build: 101547)', 'updated': '20190509', 'name': 'Ikarus', 'plugin_type': 1, 'speed': 0, 'has_internet': False, 'queued': 0, 'scanning': 0}, 
+        1, 'has_internet': False, 'queued': 0, 'scanning': 0},
+        {'infected': False, 'result': '', 'engine': '4.6.5.141', 'updated': '20190509', 'name': 'FProt', 'plugin_type': 1, 'speed': 0, 'has_internet': False, 'queued': 0, 'scanning': 0},
+        {'infected': False, 'result': '', 'engine': '3.0.0', 'database': '19050802', 'updated': '20190508', 'name': 'Avast', 'plugin_type': 1, 'speed': 0, 'has_internet': False, 'queued': 0, 'scanning': 0},
+        {'infected': False, 'result': '', 'engine': '', 'database': '', 'updated': '', 'error': 'exit status 2', 'name': 'Avg', 'plugin_type': 1, 'speed': -1, 'has_internet': False, 'queued': 0, 'scanning': 0},
+        {'infected': False, 'result': '', 'engine': '7.141118', 'updated': '20190509', 'name': 'BitDefender', 'plugin_type': 1, 'speed': 1, 'has_internet': False, 'queued': 0, 'scanning': 0},
+        {'infected': False, 'result': '', 'engine': '0.100.2', 'known': '6802108', 'updated': '20190509', 'name': 'ClamAV', 'plugin_type':1, 'speed': -1, 'has_internet': False, 'queued': 0, 'scanning': 0},
+        {'infected': False, 'result': '', 'engine': '5.0.163652.1142', 'updated': '20190509', 'name': 'Comodo', 'plugin_type': 1, 'speed': 0, 'has_internet': False, 'queued': 0, 'scanning': 0},
+        {'infected': False, 'result': '', 'engine': '7.0-20', 'updated': '20190509', 'name': 'EScan', 'plugin_type': 1, 'speed': 0, 'has_internet': False, 'queued': 0, 'scanning': 0},
+        {'infected': False, 'result': '', 'results': {'fse': '', 'aquarius': ''}, 'engine': '11.10 build 68', 'database': '2019-05-01_03', 'updated': '20190509', 'name': 'FSecure', 'plugin_type': 1, 'speed': 1, 'has_internet': False, 'queued': 0, 'scanning': 0},
+        {'infected': False, 'result': '', 'engine': '5600.1067', 'database': '9251', 'updated': '20190509', 'name': 'McAfee', 'plugin_type': 1, 'speed': 0, 'has_internet': False, 'queued': 0, 'scanning': 0},
+        {'infected': False, 'result': '', 'engine': '5.01.05', 'database':'09.05.2019 07:41:53 (Build: 101547)', 'updated': '20190509', 'name': 'Ikarus', 'plugin_type': 1, 'speed': 0, 'has_internet': False, 'queued': 0, 'scanning': 0},
         {'infected': False, 'result': '', 'engine': '5.53.0', 'database': '5.63', 'updated': '20190509', 'name': 'Sophos', 'plugin_type': 1, 'speed': 2, 'has_internet': False, 'queued': 0, 'scanning': 0}
         ]'''
 

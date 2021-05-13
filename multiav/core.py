@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 
-#-----------------------------------------------------------------------
+
 # MultiAV scanner wrapper version 0.0.1
 # Copyright (c) 2014, Joxean Koret
 #
@@ -56,30 +56,19 @@
 #   * Parallel scan, by default, based on the number of CPUs.
 #   * Analysis by AV engine speed.
 #
-#-----------------------------------------------------------------------
 
 import os
-import re
-import codecs
-import time
-import xml.etree.ElementTree
-import requests
 import json
-import random
 
 from enum import Enum
 from hashlib import sha1
 from tempfile import NamedTemporaryFile
 from multiprocessing import Process, Queue, cpu_count
-from datetime import datetime
-from promise import Promise
 
-from multiav.enumencoder import EnumEncoder
 from multiav.multiactionpromise import MultiActionPromise
-from multiav.safeconfigparserextended import SafeConfigParserExtended
 from multiav.scannerstrategy import ScannerStrategy
 
-# -----------------------------------------------------------------------
+
 class OrderedEnum(Enum):
   def __ge__(self, other):
     if self.__class__ is other.__class__:
@@ -98,12 +87,14 @@ class OrderedEnum(Enum):
       return self.value < other.value
     return NotImplemented
 
+
 class AV_SPEED(OrderedEnum):
   ALL = 3  # Run only when all engines must be executed
   ULTRA = -1
   FAST = 0
   MEDIUM = 1
   SLOW = 2
+
 
 class PLUGIN_TYPE(OrderedEnum):
   #LEGACY = 0
@@ -112,7 +103,7 @@ class PLUGIN_TYPE(OrderedEnum):
   INTEL = 3
   FILE_FORMATS = 4
 
-#-----------------------------------------------------------------------
+
 class CDockerAvScanner():
   def __init__(self, cfg_parser, name):
     self.cfg_parser = cfg_parser
@@ -131,23 +122,23 @@ class CDockerAvScanner():
     self.update_command_supported = True
     self.binary_path = "/bin/avscan"
     self.container_additional_files = []
-  
+
   def is_disabled(self):
     try:
       val = self.cfg_parser.get(self.name, "DISABLED")
 
       if val == "0" or val.lower() == "false":
         return False
-      
+
       return True
     except:
       return False
-    
+
   def scan(self, path):
     try:
         # build request params
         filename = os.path.basename(path)
-        
+
         if self.container.machine.max_scans_per_container == 1:
           # run and scan command only, container is removed post scan by docker
           run_cmd = self.container.get_run_and_scan_command(filename)
@@ -155,8 +146,8 @@ class CDockerAvScanner():
         else:
           '''
           e.g.
-          sudo docker cp /tmp/tmp_f5nzdm1 multiav-clamav-TEST:/malware/tmp_f5nzdm1 > /dev/null 2>&1; 
-          sudo docker exec multiav-clamav-TEST /bin/avscan /malware/tmp_f5nzdm1; 
+          sudo docker cp /tmp/tmp_f5nzdm1 multiav-clamav-TEST:/malware/tmp_f5nzdm1 > /dev/null 2>&1;
+          sudo docker exec multiav-clamav-TEST /bin/avscan /malware/tmp_f5nzdm1;
           sudo docker exec multiav-clamav-TEST rm /malware/tmp_f5nzdm1 > /dev/null 2>&1"
           '''
           copy_cmd = "docker cp {0} {1}:/malware/{2} > /dev/null 2>&1".format(path, self.container.id, filename)
@@ -172,7 +163,7 @@ class CDockerAvScanner():
           response_json = response_json[response_json.find("{"):]
         if response_json[-1] != "}":
           response_json = response_json[:response_json.rfind("}")+1]
-        
+
         # dont try to deserialize if empty result
         if len(response_json) < len("{\"0\":0}"):
           raise Exception("non json result: {0}".format(response))
@@ -185,7 +176,7 @@ class CDockerAvScanner():
           print(response)
         except:
           pass
-        return { 
+        return {
             "error": "{0}".format(e),
             "infected": False,
             "engine": "-",
@@ -207,18 +198,18 @@ class CDockerAvScanner():
         result = response_obj[list(response_obj)[0]]
       else:
         result = response_obj
-    
+
     # remove empty errors
     if "error" in result and result["error"] == "":
       del result["error"]
-    
+
     return result
 
-#-----------------------------------------------------------------------
+
 class CDockerHashLookupService(CDockerAvScanner):
   def __init__(self, cfg_parser, name):
     CDockerAvScanner.__init__(self, cfg_parser, name)
-  
+
   def scan(self, path):
     try:
       with open(path, "rb") as binary_file:
@@ -241,9 +232,9 @@ class CDockerHashLookupService(CDockerAvScanner):
       if response[0] != "{":
         # remove errors which could be in front of the json output
         response = response[response.find("{"):]
-      
+
       response_obj = json.loads(response)
-      
+
       return self._normalize_results(response_obj)
 
     except Exception as e:
@@ -252,7 +243,7 @@ class CDockerHashLookupService(CDockerAvScanner):
         print(response)
       except:
         pass
-      return { 
+      return {
           "error": "{0}".format(e),
           "infected": False,
           "engine": "-",
@@ -261,7 +252,7 @@ class CDockerHashLookupService(CDockerAvScanner):
           "speed": self.speed.name
       }
 
-#-----------------------------------------------------------------------
+
 class CFileInfo(CDockerAvScanner):
   def __init__(self, cfg_parser):
     CDockerAvScanner.__init__(self, cfg_parser, "FileInfo")
@@ -271,7 +262,7 @@ class CFileInfo(CDockerAvScanner):
     self.binary_path = "/bin/info"
     self.update_command_supported = False
 
-#-----------------------------------------------------------------------
+
 class CPEScanMalicePlugin(CDockerAvScanner):
   def __init__(self, cfg_parser):
     CDockerAvScanner.__init__(self, cfg_parser, "PEScan")
@@ -282,7 +273,7 @@ class CPEScanMalicePlugin(CDockerAvScanner):
     self.container_run_command_arguments["scan"] = None
     self.update_command_supported = False
 
-#-----------------------------------------------------------------------
+
 class CFlossMalicePlugin(CDockerAvScanner):
   def __init__(self, cfg_parser):
     CDockerAvScanner.__init__(self, cfg_parser, "Floss")
@@ -292,7 +283,7 @@ class CFlossMalicePlugin(CDockerAvScanner):
     self.binary_path = "/bin/flscan"
     self.update_command_supported = False
 
-#-----------------------------------------------------------------------
+
 # Update and download servers not reachable anymore :/
 '''class CZonerMalicePlugin(CDockerAvScanner):
   def __init__(self, cfg_parser):
@@ -302,7 +293,7 @@ class CFlossMalicePlugin(CDockerAvScanner):
     self.container_name = "zoner"
     self.container_enviroment_variables["ZONE_KEY"] = cfg_parser.get(self.name, "LICENSE_KEY")'''
 
-#-----------------------------------------------------------------------
+
 class CWindowsDefenderMalicePlugin(CDockerAvScanner):
   def __init__(self, cfg_parser):
     CDockerAvScanner.__init__(self, cfg_parser, "WindowsDefender")
@@ -312,7 +303,7 @@ class CWindowsDefenderMalicePlugin(CDockerAvScanner):
     self.container_run_docker_parameters["--security-opt"] = "seccomp=seccomp.json"
     self.container_additional_files.append("seccomp.json")
 
-#-----------------------------------------------------------------------
+
 class CSophosMalicePlugin(CDockerAvScanner):
   def __init__(self, cfg_parser):
     CDockerAvScanner.__init__(self, cfg_parser, "Sophos")
@@ -320,7 +311,7 @@ class CSophosMalicePlugin(CDockerAvScanner):
     self.plugin_type = PLUGIN_TYPE.AV
     self.container_name = "sophos"
 
-#-----------------------------------------------------------------------
+
 class CAvastMalicePlugin(CDockerAvScanner):
   def __init__(self, cfg_parser):
     CDockerAvScanner.__init__(self, cfg_parser, "Avast")
@@ -330,7 +321,7 @@ class CAvastMalicePlugin(CDockerAvScanner):
     self.container_additional_files.append("license.avastlic")
     self.container_run_docker_parameters["-v /home/ubuntu/license.avastlic:/etc/avast/license.avastlic"] = None
 
-#-----------------------------------------------------------------------
+
 class CAvgMalicePlugin(CDockerAvScanner):
   def __init__(self, cfg_parser):
     CDockerAvScanner.__init__(self, cfg_parser, "Avg")
@@ -338,7 +329,7 @@ class CAvgMalicePlugin(CDockerAvScanner):
     self.plugin_type = PLUGIN_TYPE.AV
     self.container_name = "avg"
 
-#-----------------------------------------------------------------------
+
 class CBitDefenderMalicePlugin(CDockerAvScanner):
   def __init__(self, cfg_parser):
     CDockerAvScanner.__init__(self, cfg_parser, "BitDefender")
@@ -347,7 +338,7 @@ class CBitDefenderMalicePlugin(CDockerAvScanner):
     self.container_name = "bitdefender"
     self.container_build_params["BDKEY"] = cfg_parser.get(self.name, "LICENSE_KEY")
 
-#-----------------------------------------------------------------------
+
 class CClamAVMalicePlugin(CDockerAvScanner):
   def __init__(self, cfg_parser):
     CDockerAvScanner.__init__(self, cfg_parser, "ClamAV")
@@ -355,7 +346,7 @@ class CClamAVMalicePlugin(CDockerAvScanner):
     self.plugin_type = PLUGIN_TYPE.AV
     self.container_name = "clamav"
 
-#-----------------------------------------------------------------------
+
 class CComodoMalicePlugin(CDockerAvScanner):
   def __init__(self, cfg_parser):
     CDockerAvScanner.__init__(self, cfg_parser, "Comodo")
@@ -363,7 +354,7 @@ class CComodoMalicePlugin(CDockerAvScanner):
     self.plugin_type = PLUGIN_TYPE.AV
     self.container_name = "comodo"
 
-#-----------------------------------------------------------------------
+
 class CDrWebMalicePlugin(CDockerAvScanner):
   def __init__(self, cfg_parser):
     CDockerAvScanner.__init__(self, cfg_parser, "DrWeb")
@@ -371,7 +362,7 @@ class CDrWebMalicePlugin(CDockerAvScanner):
     self.plugin_type = PLUGIN_TYPE.AV
     self.container_name = "drweb"
 
-#-----------------------------------------------------------------------
+
 class CEScanMalicePlugin(CDockerAvScanner):
   def __init__(self, cfg_parser):
     CDockerAvScanner.__init__(self, cfg_parser, "EScan")
@@ -379,7 +370,7 @@ class CEScanMalicePlugin(CDockerAvScanner):
     self.plugin_type = PLUGIN_TYPE.AV
     self.container_name = "escan"
 
-#-----------------------------------------------------------------------
+
 class CFProtMalicePlugin(CDockerAvScanner):
   def __init__(self, cfg_parser):
     CDockerAvScanner.__init__(self, cfg_parser, "FProt")
@@ -387,7 +378,7 @@ class CFProtMalicePlugin(CDockerAvScanner):
     self.plugin_type = PLUGIN_TYPE.AV
     self.container_name = "fprot"
 
-#-----------------------------------------------------------------------
+
 class CFSecureMalicePlugin(CDockerAvScanner):
   def __init__(self, cfg_parser):
     CDockerAvScanner.__init__(self, cfg_parser, "FSecure")
@@ -395,7 +386,7 @@ class CFSecureMalicePlugin(CDockerAvScanner):
     self.plugin_type = PLUGIN_TYPE.AV
     self.container_name = "fsecure"
 
-#-----------------------------------------------------------------------
+
 class CKasperskyMalicePlugin(CDockerAvScanner):
   def __init__(self, cfg_parser):
     CDockerAvScanner.__init__(self, cfg_parser, "Kaspersky")
@@ -403,7 +394,7 @@ class CKasperskyMalicePlugin(CDockerAvScanner):
     self.plugin_type = PLUGIN_TYPE.AV
     self.container_name = "kaspersky"
 
-#-----------------------------------------------------------------------
+
 class CMcAfeeMalicePlugin(CDockerAvScanner):
   def __init__(self, cfg_parser):
     CDockerAvScanner.__init__(self, cfg_parser, "McAfee")
@@ -411,7 +402,7 @@ class CMcAfeeMalicePlugin(CDockerAvScanner):
     self.plugin_type = PLUGIN_TYPE.AV
     self.container_name = "mcafee"
 
-#-----------------------------------------------------------------------
+
 class CYaraMalicePlugin(CDockerAvScanner):
   def __init__(self, cfg_parser):
     CDockerAvScanner.__init__(self, cfg_parser, "Yara")
@@ -421,7 +412,7 @@ class CYaraMalicePlugin(CDockerAvScanner):
     self.binary_path = "/bin/scan"
     self.update_command_supported = False
 
-#-----------------------------------------------------------------------
+
 class CShadowServerMalicePlugin(CDockerHashLookupService):
   def __init__(self, cfg_parser):
     CDockerHashLookupService.__init__(self, cfg_parser, "ShadowServer")
@@ -431,7 +422,7 @@ class CShadowServerMalicePlugin(CDockerHashLookupService):
     self.binary_path = "/bin/shadow-server"
     self.update_command_supported = False
 
-#-----------------------------------------------------------------------
+
 class CVirusTotalMalicePlugin(CDockerHashLookupService):
   def __init__(self, cfg_parser):
     CDockerHashLookupService.__init__(self, cfg_parser, "VirusTotal")
@@ -442,7 +433,7 @@ class CVirusTotalMalicePlugin(CDockerHashLookupService):
     self.binary_path = "/bin/virustotal"
     self.update_command_supported = False
 
-#-----------------------------------------------------------------------
+
 class CNationalSoftwareReferenceLibraryMalicePlugin(CDockerHashLookupService):
   def __init__(self, cfg_parser):
     CDockerHashLookupService.__init__(self, cfg_parser, "NSRL")
@@ -452,7 +443,7 @@ class CNationalSoftwareReferenceLibraryMalicePlugin(CDockerHashLookupService):
     self.binary_path = "/bin/nsrl"
     self.update_command_supported = False
 
-#-----------------------------------------------------------------------
+
 class CIkarusMalicePlugin(CDockerAvScanner):
   def __init__(self, cfg_parser):
     CDockerAvScanner.__init__(self, cfg_parser, "Ikarus")
@@ -461,7 +452,7 @@ class CIkarusMalicePlugin(CDockerAvScanner):
     self.container_name = "ikarus"
     self.container_run_docker_parameters["--shm-size"] = "256m" # default is 64m. Bus error on scan if omitted
 
-#-----------------------------------------------------------------------
+
 class CAviraMalicePlugin(CDockerAvScanner):
   def __init__(self, cfg_parser):
     CDockerAvScanner.__init__(self, cfg_parser, "Avira")
@@ -469,7 +460,7 @@ class CAviraMalicePlugin(CDockerAvScanner):
     self.plugin_type = PLUGIN_TYPE.AV
     self.container_name = "avira"
 
-#-----------------------------------------------------------------------
+
 class InvalidScannerStrategyException(Exception):
   pass
 
@@ -482,7 +473,7 @@ class CMultiAV:
                     CDrWebMalicePlugin, CEScanMalicePlugin, CFProtMalicePlugin,
                     CFSecureMalicePlugin, CKasperskyMalicePlugin, CMcAfeeMalicePlugin,
                     CYaraMalicePlugin, CShadowServerMalicePlugin, CVirusTotalMalicePlugin,
-                    CNationalSoftwareReferenceLibraryMalicePlugin, CPEScanMalicePlugin, 
+                    CNationalSoftwareReferenceLibraryMalicePlugin, CPEScanMalicePlugin,
                     CFlossMalicePlugin, CIkarusMalicePlugin, CAviraMalicePlugin]
 
     self.processes = cpu_count()
@@ -493,7 +484,7 @@ class CMultiAV:
         self.scanner_strategy = scanner_strategy
     else:
         raise InvalidScannerStrategyException("error invalid strategy")
-        
+
     # make sure /tmp/malware exists
     if "No such file or directory" in self.scanner_strategy._execute_command("ls /tmp/malware"):
         self.scanner_strategy._execute_command("mkdir /tmp/malware")
@@ -513,7 +504,7 @@ class CMultiAV:
     while len(objects) > 0 or len(running) > 0:
       if len(objects) > 0 and len(running) < self.processes:
         obj = objects.pop()
-        
+
         args_combined = (obj, results, q)
         if args != None: args_combined += args
 
@@ -558,16 +549,16 @@ class CMultiAV:
       if engine.container_requires_internet == True and not allow_internet:
         print("[{0}] Skipping. Internet policy doesn't match".format(engine.name))
         continue
-      
+
       if max_speed == None or engine.speed.value <= max_speed.value:
         engine_promise = self.scanner_strategy.scan(engine, path)
         scan_promises[engine] = engine_promise
       else:
         print("[{0}] Skipping scan. Too slow! AV: {1} Max: {2}".format(engine.name, engine.speed.value, max_speed.value))
         continue
-    
+
     scan_promise = MultiActionPromise(engine_promises=scan_promises)
-    
+
     # unregister events post scan
     if len(event_handlers) != 0:
       for event, handlers in event_handlers.items():
@@ -576,7 +567,7 @@ class CMultiAV:
             lambda res: self.scanner_strategy.unsubscribe_event_handler(event, path, handler),
             lambda res: self.scanner_strategy.unsubscribe_event_handler(event, path, handler)
           )
-    
+
     return scan_promise
 
   def scan_buffer(self, buf, max_speed=AV_SPEED.ALL, allow_internet=False, event_handlers = dict()):
@@ -601,7 +592,7 @@ class CMultiAV:
     print("unlinking file")
     os.unlink(fname)
     print("unlinking complete")
-  
+
   def get_scanners_state(self):
     scanners = {}
     for engine_class in self.engines:
@@ -609,9 +600,9 @@ class CMultiAV:
       engine = engine_class(self.parser)
 
       scanners[engine.name] = not engine.is_disabled()
-    
+
     return scanners
-  
+
   def get_scanners(self):
     scanners = {}
     for engine_class in self.engines:
@@ -630,7 +621,7 @@ class CMultiAV:
         'plugin_type': engine.plugin_type,
         'has_internet': engine.container_requires_internet
       }
-    
+
     return scanners
 
   def update(self):

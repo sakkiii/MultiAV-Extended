@@ -1,18 +1,17 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 
 import os
 import sys
-import json
 import pprint
 import time
 import requests
 
 from multiav.core import AV_SPEED
-from subprocess import check_output
 from multiav.parallelpromise import ParallelPromise
 
-#-----------------------------------------------------------------------
+
 class MultiAVClient:
+
   def __init__(self, host):
     self.host = host
 
@@ -32,7 +31,7 @@ class MultiAVClient:
 
         if response is None:
           raise Exception("invalid response from host")
-        
+
         if response["file"]["name"] != os.path.basename(filename):
           raise Exception("filenames of report and upload don't match!")
 
@@ -72,7 +71,7 @@ class MultiAVClient:
               #print("report not finished yet. rechecking in 5s...")
               time.sleep(5)
               continue
-            
+
             resolve(report)
             return
 
@@ -89,11 +88,11 @@ class MultiAVClient:
 
     return ParallelPromise(lambda resolve, reject: upload_function(resolve, reject, dont_pull_result))
 
-#-----------------------------------------------------------------------
+
 def usage():
   print("Usage:", sys.argv[0], "<multi-av host> <filename> [--minspeed speed] [--allow-internet]")
 
-#-----------------------------------------------------------------------
+
 def main(url, filename, minspeed=AV_SPEED.ALL, allow_internet=False):
   def print_result(res):
     print(" ")
@@ -108,6 +107,7 @@ def main(url, filename, minspeed=AV_SPEED.ALL, allow_internet=False):
   )
   print("scan scheduled. waiting for result (could take a while...)")
   scan_promise.wait()
+
 
 if __name__ == "__main__":
   print("[MultiAVClient]")

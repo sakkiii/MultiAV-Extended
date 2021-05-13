@@ -1,7 +1,7 @@
 import threading
 from sys import exc_info
-
 from promise import Promise
+
 
 # starts the executor function non blocking in a seperate thread
 class ThreadedPromise(Promise):
@@ -12,20 +12,24 @@ class ThreadedPromise(Promise):
     def wait(self):
         try:
             self.join()
-        except:
-            pass
+        except Exception as e:
+            print(e)
 
     def _resolve_from_executor(self, executor):
+        """
         # type: (Callable[[Callable[[T], None], Callable[[Exception], None]], None]) -> None
         # self._capture_stacktrace()
+        """
         synchronous = True
 
         def resolve(value):
+            """
             # type: (T) -> None
+            """
             self._resolve_callback(value)
 
         def reject(reason, traceback=None):
-            # type: (Exception, TracebackType) -> None
+            """# type: (Exception, TracebackType) -> None"""
             self._reject_callback(reason, synchronous, traceback)
 
         error = None

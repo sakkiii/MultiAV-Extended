@@ -16,16 +16,19 @@ from subprocess import Popen, PIPE, check_output, CalledProcessError, STDOUT
 
 from multiav.enumencoder import EnumEncoder
 from multiav.multiactionpromise import MultiActionPromise
-from multiav.exceptions import CreateNetworkException, PullPluginException, StartPluginException, CreateDockerMachineMachineException
+from multiav.exceptions import CreateNetworkException, PullPluginException, StartPluginException, \
+    CreateDockerMachineMachineException
 from multiav.parallelpromise import ParallelPromise
 
+
 class DockerMachine():
-    def __init__(self, cfg_parser, engine_classes, max_containers_per_machine, max_scans_per_container, id_overwrite = None, enable_startup_logic = True):
+    def __init__(self, cfg_parser, engine_classes, max_containers_per_machine, max_scans_per_container,
+                 id_overwrite=None, enable_startup_logic=True):
         if id_overwrite:
             self.id = str(id_overwrite)
         else:
             self.id = "multiav-{0}".format(uuid.uuid1()).lower()
-        
+
         self._event_subscribers = dict()
         self.cfg_parser = cfg_parser
 
@@ -35,8 +38,9 @@ class DockerMachine():
         self.max_scans_per_container = max_scans_per_container
 
         self._container_lock = RWLock()
-        
-        self._images_lock = dict(map(lambda engine: (engine.name, RWLock()), list(map(lambda engine_class: engine_class(self.cfg_parser), engine_classes))))
+
+        self._images_lock = dict(map(lambda engine: (engine.name, RWLock()),
+                                     list(map(lambda engine_class: engine_class(self.cfg_parser), engine_classes))))
 
         self.containers = []
         self.DOCKER_NETWORK_NO_INTERNET_NAME = self.cfg_parser.get("MULTIAV", "DOCKER_NETWORK_NO_INTERNET_NAME")
@@ -47,7 +51,7 @@ class DockerMachine():
             self.pull_all_containers()
             self.setup_networks()
             self.remove_running_containers()
-            
+
     def remove_running_containers(self):
         # reindex existing multiav containers
         with self._container_lock.writer_lock:
@@ -56,16 +60,18 @@ class DockerMachine():
                 # [['malice/floss:latest','floss'], ...]
                 if len(container_data) < 2:
                     continue
-                
+
                 container_image_name = container_data[0]
                 container_id = container_data[1]
                 if not "multiav-" in container_id:
                     continue
-                
+
                 engine = self._get_engine_from_image_name(container_image_name)
                 containers_to_remove.append(container_id)
-                print("detected already running multiav container {0} running {1}. removing now to get a clean state...".format(container_id, engine.name))
-        
+                print(
+                    "detected already running multiav container {0} running {1}. removing now to get a clean state...".format(
+                        container_id, engine.name))
+
             self.remove_containers(containers_to_remove)
 
     def setup_networks(self):
@@ -77,16 +83,16 @@ class DockerMachine():
             print("No-Internet network is not existing. Creating it now...")
             if not self.create_no_internet_network():
                 raise CreateNetworkException("Could not create no-internet-network!")
-            
+
             print("No-Internet network created")
 
         if not self.DOCKER_NETWORK_INTERNET_NAME in existing_networks:
             print("Internet network is not existing. Creating it now...")
             if not self.create_internet_network():
                 raise CreateNetworkException("Could not create internet-network!")
-            
+
             print("Internet network created")
-    
+
         print("All networks ok!")
 
     def pull_all_containers(self):
@@ -101,11 +107,11 @@ class DockerMachine():
 
             if engine.is_disabled():
                 continue
-            
+
             if "malice/{0}".format(engine.container_name) in pulled_images:
-                #print("Container {0} already pulled on machine {1}".format(engine.name, self.id))
+                # print("Container {0} already pulled on machine {1}".format(engine.name, self.id))
                 continue
-            
+
             def pull_failed_handler(engine_name):
                 not_pulled.append(engine_name)
                 print("pull of engine {0} failed!".format(engine_name))
@@ -113,10 +119,10 @@ class DockerMachine():
             pull_promise = self.pull_container(engine)
             pull_promise.then(None, lambda engine_name: pull_failed_handler(engine_name))
             pull_promises[engine.name] = pull_promise
-        
+
         # wait for completion
         for engine_name, pull_promise in pull_promises.items():
-            #print("waiting for promise {0}".format(engine_name))
+            # print("waiting for promise {0}".format(engine_name))
             pull_promise.wait()
 
         if len(not_pulled) != 0:
@@ -134,7 +140,7 @@ class DockerMachine():
             self._event_subscribers[event].append(handler)
         else:
             self._event_subscribers[event] = [handler]
-    
+
     def unsubscribe_event_handler(self, event, handler):
         if event in self._event_subscribers:
             self._event_subscribers[event].remove(handler)
@@ -145,7 +151,7 @@ class DockerMachine():
             container_scans = container.find_scans_by_file_path(file_path)
             if len(container_scans) != 0:
                 scans.extend(container_scans)
-            
+
         return scans
 
     def find_containers_by_engine(self, engine):
@@ -157,24 +163,29 @@ class DockerMachine():
 
             if container.engine.name == engine.name:
                 containers.append(container)
-        
+
         return containers
-    
+
     def _append_container_to_list(self, container):
         with self._container_lock.writer_lock:
-            print("Created docker container {0} with engine: {1} on machine {2}".format(container.id, container.engine.name, self.id))
+            print("Created docker container {0} with engine: {1} on machine {2}".format(container.id,
+                                                                                        container.engine.name, self.id))
             self.containers.append(container)
 
-    def _create_container(self, engine, id_overwrite = None, run_now = False, disable_indexing=False):
+    def _create_container(self, engine, id_overwrite=None, run_now=False, disable_indexing=False):
         try:
-            container = DockerContainer(self, engine, self.max_scans_per_container, self.DOCKER_NETWORK_NO_INTERNET_NAME, self.DOCKER_NETWORK_INTERNET_NAME, id_overwrite = id_overwrite, run_now = run_now)
+            container = DockerContainer(self, engine, self.max_scans_per_container,
+                                        self.DOCKER_NETWORK_NO_INTERNET_NAME, self.DOCKER_NETWORK_INTERNET_NAME,
+                                        id_overwrite=id_overwrite, run_now=run_now)
 
             if not disable_indexing:
                 self._append_container_to_list(container)
 
             return container
         except Exception as e:
-            print("_create_container {0} with engine: {1} on machine {2} Exception: {3}".format(container.id, container.engine.name, self.id, e))
+            print("_create_container {0} with engine: {1} on machine {2} Exception: {3}".format(container.id,
+                                                                                                container.engine.name,
+                                                                                                self.id, e))
             return None
 
     def _list_current_images(self):
@@ -183,7 +194,7 @@ class DockerMachine():
         output = output.replace("\"", "")
         images = output.split("\n")
         return images
-    
+
     def _list_existing_networks(self):
         cmd = "docker network ls --format \"{{.Name}}\""
         output = self.execute_command(cmd)
@@ -195,9 +206,9 @@ class DockerMachine():
         cmd = 'docker ps --filter status=running --format "table {{.Image}}\t{{.Names}}"'
         output = self.execute_command(cmd)
         # [['malice/floss:latest','floss'], ...]
-        containers = list(map(lambda x: list(filter(lambda q: q != '',x.split(" "))), output.split("\n")[1:]))
+        containers = list(map(lambda x: list(filter(lambda q: q != '', x.split(" "))), output.split("\n")[1:]))
         return containers
-    
+
     def _list_current_exported_images(self):
         images_path = "/tmp"
         images_identifier = "multiav-update-"
@@ -212,7 +223,7 @@ class DockerMachine():
             engine = engine_class(self.cfg_parser)
             if "malice/" + engine.container_name == image_name:
                 return engine
-        
+
         return None
 
     def does_no_internet_network_exist(self):
@@ -220,7 +231,7 @@ class DockerMachine():
         output = self.execute_command(cmd)
 
         return self.DOCKER_NETWORK_NO_INTERNET_NAME in output
-    
+
     def does_internet_network_exist(self):
         cmd = "docker network ls"
         output = self.execute_command(cmd)
@@ -229,14 +240,16 @@ class DockerMachine():
 
     def create_no_internet_network(self):
         network_address = self.cfg_parser.gets("MULTIAV", "DOCKER_NETWORK_NO_INTERNET", "10.127.139.0/24")
-        cmd = "docker network create --driver bridge --internal --subnet={1} {0}".format(self.DOCKER_NETWORK_NO_INTERNET_NAME, network_address)
+        cmd = "docker network create --driver bridge --internal --subnet={1} {0}".format(
+            self.DOCKER_NETWORK_NO_INTERNET_NAME, network_address)
         self.execute_command(cmd)
 
         return self.does_no_internet_network_exist()
 
     def create_internet_network(self):
         network_address = self.cfg_parser.gets("MULTIAV", "DOCKER_NETWORK_INTERNET", "10.231.101.0/24")
-        cmd = "docker network create --driver bridge --subnet={1} {0}".format(self.DOCKER_NETWORK_INTERNET_NAME, network_address)
+        cmd = "docker network create --driver bridge --subnet={1} {0}".format(self.DOCKER_NETWORK_INTERNET_NAME,
+                                                                              network_address)
         output = self.execute_command(cmd)
 
         return not "Error" in output
@@ -245,30 +258,30 @@ class DockerMachine():
         with self._container_lock.writer_lock:
             if len(self.containers) == self.max_containers_per_machine:
                 return None
-            
+
             container = self._create_container(engine, run_now=False)
 
         # start container outside the lock context
         if not container.run():
             raise Exception("Could not run container with engine {0} on machine {1}".format(engine.name, self.id))
-        
+
         return container
-    
-    def remove_container(self, container):        
+
+    def remove_container(self, container):
         # stop will also remove as the container is run with --rm flag
         with self._container_lock.writer_lock:
             # no need to stop the container as docker already stops the container post scan
             if self.max_scans_per_container != 1:
                 container.stop()
-            
+
             if container in self.containers:
                 self.containers.remove(container)
             return True
-    
+
     def remove_containers(self, container_ids):
         if len(container_ids) == 0:
             return
-        
+
         # efficient way to stop multiple containers
         with self._container_lock.writer_lock:
             self.containers = [c for c in self.containers if c.id not in container_ids]
@@ -276,11 +289,12 @@ class DockerMachine():
             cmd = "docker stop {0}".format(" ".join(container_ids))
             output = self.execute_command(cmd, call_super=False)
             return not "error" in output
-    
+
     def pull_container(self, engine):
-        container = DockerContainer(self, engine, -1, self.DOCKER_NETWORK_NO_INTERNET_NAME, self.DOCKER_NETWORK_INTERNET_NAME, False)
+        container = DockerContainer(self, engine, -1, self.DOCKER_NETWORK_NO_INTERNET_NAME,
+                                    self.DOCKER_NETWORK_INTERNET_NAME, False)
         return container.pull()
-    
+
     def update(self):
         update_promises = dict()
 
@@ -292,9 +306,10 @@ class DockerMachine():
             if engine.is_disabled():
                 continue
 
-            # create update container        
-            temp_update_container = DockerContainer(self, engine, -1, self.DOCKER_NETWORK_NO_INTERNET_NAME, self.DOCKER_NETWORK_INTERNET_NAME, False)
-            temp_update_container.id = "multiav-" + engine.container_name + "-updater"    
+            # create update container
+            temp_update_container = DockerContainer(self, engine, -1, self.DOCKER_NETWORK_NO_INTERNET_NAME,
+                                                    self.DOCKER_NETWORK_INTERNET_NAME, False)
+            temp_update_container.id = "multiav-" + engine.container_name + "-updater"
 
             # run update
             engine_update_promise = temp_update_container.update()
@@ -312,11 +327,11 @@ class DockerMachine():
                     container.restart()
                 except Exception as e:
                     print("post_update_cleanup_function exception: {0}".format(e))
-        
+
         update_promise.then(lambda res: post_update_cleanup_function())
 
         return update_promise
-    
+
     def load_update_file(self, update_file, engine_name):
         def _load_update_file_internal(resolve, reject, update_file, machine_id, engine_name):
             try:
@@ -330,12 +345,13 @@ class DockerMachine():
                     "date": str(datetime.datetime.now())})
             except Exception as e:
                 reject(e)
-        
-        return ParallelPromise(lambda resolve, reject: _load_update_file_internal(resolve, reject, update_file, self.id, engine_name))
 
-    def execute_command(self, command, call_super = False, shell=False):
+        return ParallelPromise(
+            lambda resolve, reject: _load_update_file_internal(resolve, reject, update_file, self.id, engine_name))
+
+    def execute_command(self, command, call_super=False, shell=False):
         print("--execute command: " + command)
-        '''try: 
+        '''try:
             # close_fds=True ?
             process = subprocess.call(command, stdout=PIPE, close_fds=True)
             output = process.communicate()[0].strip()
@@ -346,13 +362,13 @@ class DockerMachine():
         try:
             if not shell:
                 command = command.split(" ")
-            
+
             output = check_output(command, stderr=STDOUT, shell=shell)
         except CalledProcessError as e:
             output = e.output
-        
+
         return str(output.decode("utf-8"))
-    
+
     def export_images(self, output_file, engine_names):
         def _export_images_internal(resolve, reject, output_file, engine_names):
             try:
@@ -362,7 +378,7 @@ class DockerMachine():
 
                 if "error" in output.lower():
                     raise Exception("Update failed: Exception while saving images to disk: {0}".format(output))
-                
+
                 resolve({
                     "machine_id": self.id,
                     "engine_names": engine_names,
@@ -371,8 +387,9 @@ class DockerMachine():
                 })
             except Exception as e:
                 reject(e)
-            
-        return ParallelPromise(lambda resolve, reject: _export_images_internal(resolve, reject, output_file, engine_names))
+
+        return ParallelPromise(
+            lambda resolve, reject: _export_images_internal(resolve, reject, output_file, engine_names))
 
     def export_all_images(self):
         print("Checking if all engines are exported and exporting them if required...")
@@ -386,22 +403,23 @@ class DockerMachine():
 
             if engine.is_disabled():
                 continue
-            
+
             if engine.container_name in exported_images:
-                #print("Container {0} already pulled on machine {1}".format(engine.name, self.id))
+                # print("Container {0} already pulled on machine {1}".format(engine.name, self.id))
                 continue
-            
+
             def export_failed_handler(engine_name):
                 not_exported.append(engine_name)
                 print("export of engine {0} failed!".format(engine_name))
 
-            export_promise = self.export_images("/tmp/multiav-update-{0}.tar".format(engine.container_name), [engine.container_name])
+            export_promise = self.export_images("/tmp/multiav-update-{0}.tar".format(engine.container_name),
+                                                [engine.container_name])
             export_promise.then(None, lambda engine_name: export_failed_handler(engine_name))
             export_promises[engine.name] = export_promise
-        
+
         # wait for completion
         for engine_name, promise in export_promises.items():
-            #print("waiting for promise {0}".format(engine_name))
+            # print("waiting for promise {0}".format(engine_name))
             promise.wait()
 
         if len(not_exported) != 0:
@@ -412,25 +430,28 @@ class DockerMachine():
     def try_do_scan(self, engine, file_path):
         # abstract
         pass
-    
+
+
 class LocalDynamicDockerMachine(DockerMachine):
-    def __init__(self, cfg_parser, engine_classes, max_containers_per_machine, max_scans_per_container, id_overwrite = None):
-        DockerMachine.__init__(self, cfg_parser, engine_classes, max_containers_per_machine, max_scans_per_container, id_overwrite = id_overwrite)
-    
+    def __init__(self, cfg_parser, engine_classes, max_containers_per_machine, max_scans_per_container,
+                 id_overwrite=None):
+        DockerMachine.__init__(self, cfg_parser, engine_classes, max_containers_per_machine, max_scans_per_container,
+                               id_overwrite=id_overwrite)
+
     def try_do_scan(self, engine, file_path):
         try:
             self._container_lock.writer_lock.acquire()
-            
+
             # multiple scans per container allowed?
             if self.max_scans_per_container != 1:
                 containers = self.find_containers_by_engine(engine)
-                
+
                 if len(containers) != 0:
                     if not containers[0].try_do_scan(file_path):
                         return None, None
-                    
+
                     return containers[0], self
-            
+
             # create new container
             print("Creating container on {0} with engine {1}".format(self.id, engine.name))
 
@@ -439,28 +460,33 @@ class LocalDynamicDockerMachine(DockerMachine):
 
             if self.max_scans_per_container != 1:
                 if not container.run():
-                    raise Exception("Could not run container with engine {0} on machine {1}".format(engine.name, self.id))
+                    raise Exception(
+                        "Could not run container with engine {0} on machine {1}".format(engine.name, self.id))
 
             if not container.try_do_scan(file_path):
-                raise Exception("Could not add scan to newly created container with engine {0} on machine {1}".format(engine.name, self.id))
-            
+                raise Exception(
+                    "Could not add scan to newly created container with engine {0} on machine {1}".format(engine.name,
+                                                                                                          self.id))
+
             return container, self
         finally:
             if self._container_lock.writer_lock._is_owned():
                 self._container_lock.writer_lock.release()
 
+
 class LocalStaticDockerMachine(DockerMachine):
-    def __init__(self, cfg_parser, engine_classes, id_overwrite = None):
-        DockerMachine.__init__(self, cfg_parser, engine_classes, max_containers_per_machine = -1, max_scans_per_container = -1, id_overwrite = id_overwrite)
+    def __init__(self, cfg_parser, engine_classes, id_overwrite=None):
+        DockerMachine.__init__(self, cfg_parser, engine_classes, max_containers_per_machine=-1,
+                               max_scans_per_container=-1, id_overwrite=id_overwrite)
 
         print("Starting a container for all plugins...")
         for engine_class in self.engine_classes:
-            #create instance
+            # create instance
             engine = engine_class(self.cfg_parser)
 
             if engine.is_disabled():
                 continue
-            
+
             # check if new instance must be created
             containers_running_this_engine = self.find_containers_by_engine(engine)
 
@@ -469,7 +495,9 @@ class LocalStaticDockerMachine(DockerMachine):
                 container = self._create_container(engine, run_now=True)
             elif len(containers_running_this_engine) == 1:
                 # there's already a container running this engine
-                print("WARNING: reusing already running container {0} with engine {1}. Assuming no scans are running on this one...".format(containers_running_this_engine[0].id, containers_running_this_engine[0].engine.name))
+                print("WARNING: reusing already running container {0} with engine {1}. Assuming no scans are running "
+                      "on this one...".format(containers_running_this_engine[0].id, containers_running_this_engine[
+                    0].engine.name))
                 pass
             else:
                 # too many containers running this engine, stop all except one
@@ -478,15 +506,15 @@ class LocalStaticDockerMachine(DockerMachine):
                     container.remove()
                     self.containers.remove(container)
                     print("stopped container {0} running engine {1}".format(container.id, container.engine.name))
-        
+
         print("All plugins started!")
-    
+
     def create_container(self, engine):
         print("create container not supported")
 
     def remove_container(self, container):
         print("remove container not supported")
-    
+
     def try_do_scan(self, engine, file_path):
         containers = self.find_containers_by_engine(engine)
         if len(containers) == 0:
@@ -494,17 +522,21 @@ class LocalStaticDockerMachine(DockerMachine):
             container = self._create_container(engine, run_now=True)
             if not container.try_do_scan(file_path):
                 return None, None
-            
+
             return container, self
-        
+
         if not containers[0].try_do_scan(file_path):
             return None, None
-        
+
         return containers[0], self
 
+
 class DockerMachineMachine(DockerMachine):
-    def __init__(self, cfg_parser, engine_classes, max_containers_per_machine, max_scans_per_container, create_machine = True, minimal_machine_run_time = 400, id_overwrite = None, execute_startup_checks = True, never_shutdown = False):
-        DockerMachine.__init__(self, cfg_parser, engine_classes, max_containers_per_machine, max_scans_per_container, id_overwrite=id_overwrite, enable_startup_logic=False)
+    def __init__(self, cfg_parser, engine_classes, max_containers_per_machine, max_scans_per_container,
+                 create_machine=True, minimal_machine_run_time=400, id_overwrite=None, execute_startup_checks=True,
+                 never_shutdown=False):
+        DockerMachine.__init__(self, cfg_parser, engine_classes, max_containers_per_machine, max_scans_per_container,
+                               id_overwrite=id_overwrite, enable_startup_logic=False)
         self.max_scans_per_container = max_scans_per_container
         self.max_containers_per_machine = max_containers_per_machine
         self.minimal_machine_run_time = minimal_machine_run_time
@@ -519,12 +551,12 @@ class DockerMachineMachine(DockerMachine):
         if create_machine:
             if not self._create_machine():
                 raise CreateDockerMachineMachineException("could not create machine!")
-        
+
         # do this manually as we may have to start the machine first
         if execute_startup_checks:
             if not create_machine:
                 self.mount_shared_storage()
-            
+
             self.copy_and_load_all_images(force=create_machine)
             self.setup_networks()
             self.remove_running_containers()
@@ -537,7 +569,7 @@ class DockerMachineMachine(DockerMachine):
         def fn():
             self._shutdown_check_last_date = datetime.datetime.now()
             self._shutdown_check_backoff = 1
-            
+
             while True:
                 time.sleep(self.minimal_machine_run_time ** self._shutdown_check_backoff)
 
@@ -549,14 +581,14 @@ class DockerMachineMachine(DockerMachine):
         self._shutdown_check_thread = threading.Thread(target=fn)
         self._shutdown_check_thread.daemon = True
         self._shutdown_check_thread.start()
-    
+
     def try_shutdown(self):
         can_shutdown = True
         for container in self.containers:
             if len(container.scans) != 0:
                 can_shutdown = False
                 break
-        
+
         if not can_shutdown:
             # resschedule check
             print("try_shutdown: can not shut down machine.")
@@ -565,7 +597,7 @@ class DockerMachineMachine(DockerMachine):
         if not self._remove_machine():
             print("try_shutdown: shutdown failed!!")
             return False
-        
+
         return True
 
     def _create_machine(self):
@@ -583,9 +615,9 @@ class DockerMachineMachine(DockerMachine):
             self.mount_shared_storage()
 
             self._rise_event("machine_started", self)
-        
+
         return result
-    
+
     def _remove_machine(self):
         cmd = "docker-machine rm -f {0}".format(self.id)
 
@@ -597,10 +629,10 @@ class DockerMachineMachine(DockerMachine):
         if result:
             self._rise_event("shutdown", self)
             self.umount_shared_storage()
-        
+
         return result
-        
-    def execute_command(self, command, call_super = False, dont_prepend_sudo = False):
+
+    def execute_command(self, command, call_super=False, dont_prepend_sudo=False):
         # execute command
         if call_super:
             output = DockerMachine.execute_command(self, command)
@@ -612,13 +644,13 @@ class DockerMachineMachine(DockerMachine):
                 cmd = "docker-machine ssh {0} {1}".format(self.id, command)
             else:
                 cmd = "docker-machine ssh {0} sudo {1}".format(self.id, command)
-            
+
             output = DockerMachine.execute_command(self, cmd)
 
         return output
 
     def umount_shared_storage(self):
-        # remove dir 
+        # remove dir
         self.execute_command("rm -fr /tmp/{0}".format(self.id), call_super=True)
 
         # umount required? if so mount -u dev:/home/docker/foo foo
@@ -630,7 +662,8 @@ class DockerMachineMachine(DockerMachine):
         # create dir in /tmp on manager
         self.execute_command("mkdir /tmp/{0}".format(self.id), call_super=True)
 
-        # e.g. docker-machine mount multiav-0c309a7c-7e2a-11e9-b6fb-fa163e30c982:/tmp /tmp/multiav-0c309a7c-7e2a-11e9-b6fb-fa163e30c982/
+        # e.g. docker-machine mount multiav-0c309a7c-7e2a-11e9-b6fb-fa163e30c982:
+        # /tmp /tmp/multiav-0c309a7c-7e2a-11e9-b6fb-fa163e30c982/
         cmd = "docker-machine mount {0}:/tmp/malware /tmp/{0}".format(self.id)
 
         # are other machines running? if so copy all their files
@@ -643,11 +676,12 @@ class DockerMachineMachine(DockerMachine):
         def _copy_function(resolve, reject, machine, engine_name, update_file):
             try:
                 # use docker-machine scp -d to copy deltas only (using rsync)
-                output = self.execute_command("docker-machine scp -d {0} {1}:{0}".format(update_file, machine.id), call_super=True)
+                output = self.execute_command("docker-machine scp -d {0} {1}:{0}".format(update_file, machine.id),
+                                              call_super=True)
 
                 if "Error" in output:
                     raise Exception("SCP error: {0}".format(output))
-                
+
                 resolve({
                     "machine": self,
                     "file": update_file,
@@ -656,26 +690,27 @@ class DockerMachineMachine(DockerMachine):
                 })
             except Exception as e:
                 reject(e)
-        
+
         return ParallelPromise(lambda resolve, reject: _copy_function(resolve, reject, self, engine_name, update_file))
 
-    def copy_and_load_all_images(self, force=False):        
+    def copy_and_load_all_images(self, force=False):
         print("Checking if all engines are copied to the machine and do so if required...")
         promises = dict()
         failed = []
 
         def _copy_load(machine, resolve, reject, exported_image_path, engine):
             try:
-                print("engine image file {0} not existent on worker {1}. copying now...".format(exported_image_path, machine.id))
+                print("engine image file {0} not existent on worker {1}. copying now...".format(exported_image_path,
+                                                                                                machine.id))
                 copy_promise = self.copy_image_to_machine(engine.name, exported_image_path)
                 copy_promise.then(None, lambda err: _failed_handler(engine.name))
                 copy_promise.wait()
-                
+
                 print("engine image {0} not loaded on worker {1}. loading now...".format(engine.name, machine.id))
                 load_promise = self.load_update_file(exported_image_path, engine.name)
-                load_promise.then(lambda res: resolve(res), lambda err: _failed_handler(engine.name))                
+                load_promise.then(lambda res: resolve(res), lambda err: _failed_handler(engine.name))
             except Exception as e:
-                reject(e)        
+                reject(e)
 
         loaded_images = self._list_current_images()
         for engine_class in self.engine_classes:
@@ -684,11 +719,11 @@ class DockerMachineMachine(DockerMachine):
 
             if engine.is_disabled():
                 continue
-            
+
             if not force and "malice/{0}".format(engine.container_name) in loaded_images:
-                #print("Container {0} already pulled on machine {1}".format(engine.name, self.id))
+                # print("Container {0} already pulled on machine {1}".format(engine.name, self.id))
                 continue
-            
+
             def _failed_handler(engine_name):
                 failed.append(engine_name)
                 print("copy of engine {0} failed!".format(engine_name))
@@ -699,20 +734,21 @@ class DockerMachineMachine(DockerMachine):
             promise = None
             if "No such file or directory" in self.execute_command("ls {0}".format(exported_image_path)):
                 # file not on machine, copy and load
-                promise = ParallelPromise(lambda resolve, reject: _copy_load(self, resolve, reject, exported_image_path, engine))
+                promise = ParallelPromise(
+                    lambda resolve, reject: _copy_load(self, resolve, reject, exported_image_path, engine))
             else:
                 # file on machine: load
                 promise = self.load_update_file(exported_image_path, engine.name)
 
             # handle pull errors
             promise.then(None, lambda engine_name: _failed_handler(engine_name))
-            
+
             # store promise in list
             promises[engine.name] = promise
-        
+
         # wait for completion
         for engine_name, promise in promises.items():
-            #print("waiting for promise {0}".format(engine_name))
+            # print("waiting for promise {0}".format(engine_name))
             promise.wait()
 
         if len(failed) != 0:
@@ -728,7 +764,8 @@ class DockerMachineMachine(DockerMachine):
             if self.max_scans_per_container == 1:
                 # do we have the resources to add a new container?
                 if container_amount >= self.max_containers_per_machine:
-                    print("No ressources to start container with engine {0} on machine {1}".format(engine.name, self.id))
+                    print(
+                        "No ressources to start container with engine {0} on machine {1}".format(engine.name, self.id))
                     self._container_lock.writer_lock.release()
                     return None, None
 
@@ -737,8 +774,10 @@ class DockerMachineMachine(DockerMachine):
 
                 # dont' start container now, will be only used once and therefore started on scan
                 if not container.try_do_scan(file_path):
-                    raise Exception("Could not add scan to newly created container with engine {0} on machine {1}".format(engine.name, self.id))
-                
+                    raise Exception(
+                        "Could not add scan to newly created container with engine {0} on machine {1}".format(
+                            engine.name, self.id))
+
                 return container, self
             else:
                 # multiple scans per container are allowed
@@ -750,36 +789,42 @@ class DockerMachineMachine(DockerMachine):
                             print("using container for multiple scans")
                             self._container_lock.writer_lock.release()
                             return container, self
-                
+
                 # can we create a new container?
                 if container_amount >= self.max_containers_per_machine:
-                    print("No ressources to start container with engine {0} on machine {1}".format(engine.name, self.id))
+                    print(
+                        "No ressources to start container with engine {0} on machine {1}".format(engine.name, self.id))
                     self._container_lock.writer_lock.release()
                     return None, None
 
                 # create a new container for scan
                 container = self._create_container(engine, run_now=False)
                 self._container_lock.writer_lock.release()
-                
+
                 # start container outside the lock context
                 if not container.run():
-                    raise Exception("Could not run container with engine {0} on machine {1}".format(engine.name, self.id))
+                    raise Exception(
+                        "Could not run container with engine {0} on machine {1}".format(engine.name, self.id))
 
                 if not container.try_do_scan(file_path):
-                    raise Exception("Could not add scan to newly created container with engine {0} on machine {1}".format(engine.name, self.id))
-                
+                    raise Exception(
+                        "Could not add scan to newly created container with engine {0} on machine {1}".format(
+                            engine.name, self.id))
+
                 return container, self
         finally:
             if self._container_lock.writer_lock._is_owned():
                 self._container_lock.writer_lock.release()
-    
+
+
 class DockerContainer():
-    def __init__(self, machine, engine, max_scans_per_container, network_no_internet_name, network_internet_name, id_overwrite = None, run_now = False):
+    def __init__(self, machine, engine, max_scans_per_container, network_no_internet_name, network_internet_name,
+                 id_overwrite=None, run_now=False):
         if id_overwrite:
             self.id = id_overwrite
         else:
             self.id = "multiav-{0}-{1}".format(engine.name, uuid.uuid1()).lower()
-        
+
         self.machine = machine
         self.engine = engine
         self.scans = []
@@ -795,13 +840,13 @@ class DockerContainer():
         if run_now:
             if not self.run():
                 raise Exception("Container run failed")
-        
+
     def _get_tag(self):
         cmd = "docker images malice/{0}:updated".format(self.engine.container_name)
         output = self.machine.execute_command(cmd)
 
         return "updated" if self.engine.container_name in output else "latest"
-    
+
     def _check_pending_actions(self):
         if len(self.scans) != 0:
             return
@@ -813,10 +858,10 @@ class DockerContainer():
         if self.restart_pending:
             self.restart()
             return
-        
+
         if self.stop_pending:
             self.stop()
-            return        
+            return
 
     def pull(self):
         # pull function wrapped in promise
@@ -830,31 +875,34 @@ class DockerContainer():
                 print("Container {0} pull on machine {1} FAILED!".format(self.engine.name, self.machine.id))
                 reject(Exception("_pull failed for engine {0}".format(self.engine.name)))
                 return
-            
+
             resolve(self.engine.name)
             return
-        
+
         return ParallelPromise(lambda resolve, reject: pull_wrapper(resolve, reject))
 
     def _pull(self, set_active=True):
         # seriell pull function
         try:
             # pull or build new container
-            if self.engine.container_build_url_override != None or len(self.engine.container_build_params) != 0:
+            if self.engine.container_build_url_override is not None or len(self.engine.container_build_params) != 0:
                 container_url = ""
                 if self.engine.container_build_url_override:
                     container_url = self.engine.container_build_url_override
                 else:
                     container_url = "https://github.com/malice-plugins/{0}.git".format(self.engine.container_name)
-            
-                print("building docker container malice/{0}:latest from url: {1}".format(self.engine.container_name, container_url))
-                cmd = "docker build --tag malice/{0}:latest$BUILDARGS$ {1}".format(self.engine.container_name, container_url)
+
+                print("building docker container malice/{0}:latest from url: {1}".format(self.engine.container_name,
+                                                                                         container_url))
+                cmd = "docker build --tag malice/{0}:latest$BUILDARGS$ {1}".format(self.engine.container_name,
+                                                                                   container_url)
 
                 # set build params (e.g license keys)
                 if len(self.engine.container_build_params) == 0:
                     cmd = cmd.replace("$BUILDARGS$", "")
                 else:
-                    cmd = cmd.replace("$BUILDARGS$", "".join(map(lambda kv: " --build-arg " + kv[0] + "=" + kv[1], self.engine.container_build_params.items())))
+                    cmd = cmd.replace("$BUILDARGS$", "".join(map(lambda kv: " --build-arg " + kv[0] + "=" + kv[1],
+                                                                 self.engine.container_build_params.items())))
 
                 output = self.machine.execute_command(cmd)
 
@@ -872,7 +920,7 @@ class DockerContainer():
                 if not ("Status: Downloaded newer image" in output or "Status: Image is up to date" in output):
                     print(output)
                     return False
-                
+
                 print("Pulled container for plugin {0} successfully!".format(self.engine.container_name))
 
             # any additional files required?
@@ -881,43 +929,53 @@ class DockerContainer():
                 dest_dir = self.machine.execute_command("pwd").rstrip()
                 for additional_file in self.engine.container_additional_files:
                     additional_file_name = os.path.basename(additional_file)
-                    cmd = "docker-machine scp {0} {1}:{2}/{3}".format(additional_file, self.machine.id, dest_dir, additional_file_name)
-                    output = self.machine.execute_command(cmd, call_super = True)
+                    cmd = "docker-machine scp {0} {1}:{2}/{3}".format(additional_file, self.machine.id, dest_dir,
+                                                                      additional_file_name)
+                    output = self.machine.execute_command(cmd, call_super=True)
 
                     # check copy success
                     if "scp: " in output:
-                        print("Container {0} copy additional file {2} to machine {1} FAILED!".format(self.engine.name, self.machine.id, additional_file))
+                        print("Container {0} copy additional file {2} to machine {1} FAILED!".format(self.engine.name,
+                                                                                                     self.machine.id,
+                                                                                                     additional_file))
                         print(output)
                         return False
-                    
-                    print("Copied file {0} for container {1} to machine {2} successfully!".format(additional_file_name, self.engine.name, self.machine.id))
-            
+
+                    print("Copied file {0} for container {1} to machine {2} successfully!".format(additional_file_name,
+                                                                                                  self.engine.name,
+                                                                                                  self.machine.id))
+
             # set image active by renaming to current
             if set_active:
                 with self.machine._images_lock[self.engine.name].writer_lock:
                     # remove old image
                     if not self.remove_image("old"):
-                        print("Container {0} on machine {1} remove :old image FAILED!".format(self.engine.name, self.machine.id))
+                        print("Container {0} on machine {1} remove :old image FAILED!".format(self.engine.name,
+                                                                                              self.machine.id))
                         return False
 
                     # rename current to old
                     if not self.retag("current", "old"):
-                        print("Container {0} on machine {1} retag :current image to :old FAILED!".format(self.engine.name, self.machine.id))
+                        print(
+                            "Container {0} on machine {1} retag :current image to :old FAILED!".format(self.engine.name,
+                                                                                                       self.machine.id))
                         return False
 
-                    # rename latest to current 
+                    # rename latest to current
                     if not self.addtag("latest", "current"):
-                        print("Container {0} on machine {1} retag :latest image to :current FAILED!".format(self.engine.name, self.machine.id))
+                        print("Container {0} on machine {1} retag :latest image to :current FAILED!".format(
+                            self.engine.name, self.machine.id))
                         return False
-            
+
             print("Pull of plugin {0} on machine {1} successs!".format(self.engine.name, self.machine.id))
             return True
         except Exception as e:
-            print("Pull of plugin {0} on machine {1} failed! Exception: {2}".format(self.engine.name, self.machine.id, e))
+            print(
+                "Pull of plugin {0} on machine {1} failed! Exception: {2}".format(self.engine.name, self.machine.id, e))
             return False
 
     def find_scans_by_file_path(self, file_path):
-        scans =  []
+        scans = []
         for scan in self.scans:
             if scan == file_path:
                 scans.append((self, file_path))
@@ -929,24 +987,31 @@ class DockerContainer():
             cmd = cmd.replace("$DOCKERPARAMS$", "")
         else:
             cmd = cmd.replace("$DOCKERPARAMS$", " " + " ".join(
-                map(lambda kv: kv[0] + "=" + kv[1] if kv[1] != None else kv[0], self.engine.container_run_docker_parameters.items())))
-            
+                map(lambda kv: kv[0] + "=" + kv[1] if kv[1] != None else kv[0],
+                    self.engine.container_run_docker_parameters.items())))
+
         # set command arguments
         if len(self.engine.container_run_command_arguments) == 0:
             cmd = cmd.replace("$CMDARGS$", "")
         else:
-            cmd = cmd.replace("$CMDARGS$", " " + " ".join(map(lambda kv: kv[0] + "=" + kv[1] if kv[1] != None else kv[0], self.engine.container_run_command_arguments.items())))
-        
-        return cmd        
+            cmd = cmd.replace("$CMDARGS$", " " + " ".join(
+                map(lambda kv: kv[0] + "=" + kv[1] if kv[1] != None else kv[0],
+                    self.engine.container_run_command_arguments.items())))
+
+        return cmd
 
     def get_run_web_command(self):
         network_name = self.network_internet_name if self.engine.container_requires_internet else self.network_no_internet_name
-        cmd = "docker run -d --name {0} --net {1}$DOCKERPARAMS$ --rm malice/{2}:current$CMDARGS$ web".format(self.id, network_name, self.engine.container_name)
+        cmd = "docker run -d --name {0} --net {1}$DOCKERPARAMS$ --rm malice/{2}:current$CMDARGS$ web".format(self.id,
+                                                                                                             network_name,
+                                                                                                             self.engine.container_name)
         return self._replace_run_command_variables(cmd)
 
     def get_run_and_scan_command(self, file_to_scan):
         network_name = self.network_internet_name if self.engine.container_requires_internet else self.network_no_internet_name
-        cmd = "docker run --name {0} --net {1}$DOCKERPARAMS$ --rm -v /tmp/malware:/malware:ro malice/{2}:current$CMDARGS$ {3}".format(self.id, network_name, self.engine.container_name, file_to_scan)
+        cmd = "docker run --name {0} --net {1}$DOCKERPARAMS$ --rm -v /tmp/malware:/malware:ro malice/{" \
+              "2}:current$CMDARGS$ {3}".format(
+            self.id, network_name, self.engine.container_name, file_to_scan)
         return self._replace_run_command_variables(cmd)
 
     def run(self):
@@ -968,19 +1033,19 @@ class DockerContainer():
                 print(cmd)
                 print(e)
                 return False
-    
+
     def remove(self):
         if len(self.scans) != 0:
             self.remove_pending = True
             return True
-        
+
         cmd = "docker rm {0}".format(self.id)
         output = self.machine.execute_command(cmd)
 
         return self.engine.container_name in output
-    
+
     def is_pulled(self):
-        #latest must always exist
+        # latest must always exist
         cmd = "docker images malice/{0}:current".format(self.engine.container_name)
         output = self.machine.execute_command(cmd)
         res = self.engine.container_name in output
@@ -995,7 +1060,7 @@ class DockerContainer():
         if len(self.scans) != 0:
             self.stop_pending = True
             return True
-        
+
         cmd = "docker stop {0}".format(self.id)
         output = self.machine.execute_command(cmd)
         return self.id in output
@@ -1009,17 +1074,17 @@ class DockerContainer():
         print("{0} restarting".format(self.id))
         if self.stop():
             return self.run()
-        
+
         return False
-    
+
     def try_do_scan(self, file_path):
         if self.max_scans_per_container != -1:
             if len(self.scans) >= self.max_scans_per_container:
                 return False
-            
+
         self.scans.append(file_path)
         return True
-    
+
     def remove_scan(self, file_path):
         if not file_path in self.scans:
             self._check_pending_actions()
@@ -1033,15 +1098,15 @@ class DockerContainer():
         cmd = "docker run --rm malice/{0}:current --version".format(self.engine.container_name)
 
         # e.g: floss version v0.1.0, BuildTime: 20190209
-        output = self.machine.execute_command(cmd)  
-        
+        output = self.machine.execute_command(cmd)
+
         version = output[output.find("version v") + len("version v"):output.find(",")]
         buildtime = output[output.find("BuildTime: ") + len("BuildTime: "):]
 
         # e.g. pescan only returns v0.1.0
         if len(version) == 0:
             version = output
-        
+
         # replace empty results with dash
         if len(version) == 0:
             version = "-"
@@ -1051,14 +1116,15 @@ class DockerContainer():
         return version, buildtime
 
     def get_signature_version(self):
-        cmd = "docker run --rm --entrypoint cat malice/{0}:current /opt/malice/UPDATED".format(self.engine.container_name)
+        cmd = "docker run --rm --entrypoint cat malice/{0}:current /opt/malice/UPDATED".format(
+            self.engine.container_name)
         output = self.machine.execute_command(cmd)
 
         if "No such file or directory" in output or "Unable to find image" in output:
             return "-"
-        
+
         return output
-    
+
     def remove_image(self, tag):
         cmd = "docker rmi malice/{0}:{1}".format(self.engine.container_name, tag)
         output = self.machine.execute_command(cmd)
@@ -1066,7 +1132,7 @@ class DockerContainer():
         if "Error" in output and not "No such image" in output:
             print(output)
             return False
-        
+
         return True
 
     def addtag(self, current_tag, new_tag):
@@ -1111,10 +1177,10 @@ class DockerContainer():
                 if not self._pull():
                     print("[{0}] Update failed. Could not pull container!".format(self.engine.container_name))
                     raise Exception("pull failed")
-                
+
                 # Get new container version info
                 new_container_version, new_container_build_time = self.get_container_version()
-               
+
             if self.engine.update_command_supported:
                 # cleanup :old and :update image
                 try:
@@ -1135,7 +1201,6 @@ class DockerContainer():
                 except Exception as e:
                     print("[{0}] Docker run update command exception {1}".format(self.engine.container_name, e))
                     raise Exception("create update container failed")
-                
 
                 # save updated container as new image with tag updated
                 try:
@@ -1145,12 +1210,12 @@ class DockerContainer():
                     print("[{0}] Docker commit exception {1}".format(self.engine.container_name, e))
                     self.remove()
                     raise Exception("Commit :updated inage failed")
-                
+
                 # remove the container used for updating
                 if not self.remove():
                     print("[{0}] {1}".format(self.engine.container_name, "could not remove the updated container"))
                     raise Exception("remove updated container failed")
-                
+
                 # rename current image to old and updated image to current
                 try:
                     with self.machine._images_lock[self.engine.name].writer_lock:

@@ -1,6 +1,3 @@
-import time
-import uuid
-
 from sys import exc_info
 from threading import Thread, Event
 from promise import Promise
@@ -45,7 +42,7 @@ class ParallelPromise(Promise):
         try:
             self.thread = Thread(target=executor, args=(resolve, reject))
             self.thread.daemon = True
-            self.thread.start()            
+            self.thread.start()
         except Exception as e:
             traceback = exc_info()[2]
             error = e

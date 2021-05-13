@@ -1,7 +1,9 @@
-import httplib
 import mimetypes
+# import httplib
+httplib = "(Warning) Library depreciated in python3"
 
 
+# ***[warning]*** Function depreciated
 def post_multipart(host, selector, fields, files):
     """
     Post fields and files to an http host as multipart/form-data.
@@ -20,6 +22,7 @@ def post_multipart(host, selector, fields, files):
     return h.file.read()
 
 
+# ***[warning]*** Function depreciated
 def encode_multipart_formdata(fields, files):
     """
     fields is a sequence of (name, value) elements for regular form fields.
